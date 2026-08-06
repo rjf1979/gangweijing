@@ -4,6 +4,7 @@
 !.env.example
 *.pem
 *.key
+GITHUB_DEPLOY_KEY.pub
 云服务器配置.txt
 
 # Runtime data and user uploads
