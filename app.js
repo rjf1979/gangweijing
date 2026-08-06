@@ -5,6 +5,15 @@ const replacingResume = () => new URLSearchParams(location.search).get('mode') =
 let loginMode = true;
 let email = '';
 
+function setLoading(visible, title = '正在加载', tip = '请稍候，马上进入正确页面') {
+  $('#loading-title').textContent = title;
+  $('#loading-tip').textContent = tip;
+  $('#app-loading').classList.toggle('hidden', !visible);
+}
+function showWelcome() {
+  $('#flow').classList.add('hidden'); $('#email-verification').classList.add('hidden'); $('#welcome').classList.remove('hidden'); setLoading(false);
+}
+
 function safe(value) {
   const node = document.createElement('span');
   node.textContent = Array.isArray(value) ? value.join('；') : String(value || '');
@@ -40,7 +49,7 @@ function enter(value, step = currentStep()) {
   $('#welcome')?.classList.add('hidden');
   $('#email-verification')?.classList.add('hidden');
   $('#flow')?.classList.remove('hidden');
-  hydrate(step); show(step);
+  hydrate(step); show(step); setLoading(false);
 }
 function maskedEmail(value) { const [name, domain = ''] = String(value || '').split('@'); return name ? `${name.slice(0, 2)}***@${domain}` : ''; }
 function showVerification(value, sent = null) {
@@ -52,6 +61,7 @@ function showVerification(value, sent = null) {
   $('#verification-status').textContent = sent === true ? '验证邮件已发送，请在 24 小时内完成验证。' : sent === false ? '验证邮件暂未发送成功，请检查邮件配置后重试。' : '如果没有收到邮件，可以重新发送。';
   $('#resend-verification').classList.remove('hidden');
   $('#verification-continue').classList.add('hidden');
+  setLoading(false);
 }
 function mode(login) {
   loginMode = login;
@@ -60,16 +70,17 @@ function mode(login) {
   $('#onboard-error').textContent = '';
 }
 function go(step) {
-  hydrate(step); show(step, true);
+  hydrate(step); show(step, true); setLoading(false);
 }
 
 $('#auth-switch').onclick = () => mode(!loginMode);
 $('#onboarding').onsubmit = async event => {
   event.preventDefault();
+  setLoading(true, loginMode ? '正在登录' : '正在创建账号', '正在安全确认你的账号信息');
   const value = $('#onboard-email').value.trim();
   const response = await fetch(loginMode ? '/api/login' : '/api/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: value, password: $('#onboard-password').value }) });
   const data = await response.json();
-  if (!response.ok) return $('#onboard-error').textContent = data.error;
+  if (!response.ok) { setLoading(false); return $('#onboard-error').textContent = data.error; }
   if (!data.user.emailVerified) return showVerification(data.user.email, data.verificationEmailSent);
   if (location.pathname === '/my-resume') return resumePage();
   enter(value, 'resume');
@@ -83,43 +94,46 @@ $('#resend-verification').onclick = async () => {
 };
 
 $('#resume-next').onclick = async () => {
+  setLoading(true, '正在读取简历', '提取文本并保存到你的账号');
   let text = $('#resume-text').value.trim();
   const file = $('#resume-file').files[0];
   if (file) {
     const form = new FormData(); form.append('resume', file);
     const response = await fetch('/api/extract/resume', { method: 'POST', body: form });
     const data = await response.json();
-    if (!response.ok) return $('#resume-error').textContent = data.error;
+    if (!response.ok) { setLoading(false); return $('#resume-error').textContent = data.error; }
     text = data.text; $('#resume-text').value = text;
   }
-  if (!text) return $('#resume-error').textContent = '请上传简历或粘贴简历文本。';
-  try { await persistResume(text); } catch (error) { return $('#resume-error').textContent = error.message; }
+  if (!text) { setLoading(false); return $('#resume-error').textContent = '请上传简历或粘贴简历文本。'; }
+  try { await persistResume(text); } catch (error) { setLoading(false); return $('#resume-error').textContent = error.message; }
   saveDraft({ resumeText: text }); go('facts');
 };
 $('#facts-next').onclick = async () => {
+  setLoading(true, '正在保存简历事实', '保存完成后进入目标岗位');
   const facts = $('#facts-text').value.trim();
-  if (!facts) return $('#facts-error').textContent = '请确认或补充职业事实。';
-  try { await persistResume(facts); } catch (error) { return $('#facts-error').textContent = error.message; }
+  if (!facts) { setLoading(false); return $('#facts-error').textContent = '请确认或补充职业事实。'; }
+  try { await persistResume(facts); } catch (error) { setLoading(false); return $('#facts-error').textContent = error.message; }
   saveDraft({ facts }); go('job');
 };
 $('#job-next').onclick = async () => {
+  setLoading(true, '正在处理目标岗位', '识别岗位信息并准备分析');
   let text = $('#job-text').value.trim();
   const file = $('#job-file').files[0];
   if (file && !text) {
     const form = new FormData(); form.append('screenshot', file);
     const response = await fetch('/api/extract/screenshot', { method: 'POST', body: form });
     const data = await response.json();
-    if (!response.ok) return $('#job-error').textContent = data.error;
+    if (!response.ok) { setLoading(false); return $('#job-error').textContent = data.error; }
     text = data.text; $('#job-text').value = text;
     if (data.companyShortName) $('#company-short-name').value = data.companyShortName;
     if (data.jobTitle) $('#job-title').value = data.jobTitle;
   }
-  if (!text) return $('#job-error').textContent = '请上传截图或粘贴职位描述。';
+  if (!text) { setLoading(false); return $('#job-error').textContent = '请上传截图或粘贴职位描述。'; }
   const d = draft(); saveDraft({ jobText: text, companyShortName: $('#company-short-name').value.trim(), jobTitle: $('#job-title').value.trim() });
   const button = $('#job-next'); button.disabled = true; button.textContent = 'AI 分析中…';
   const response = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resumeText: d.facts || d.resumeText, jobText: text, companyShortName: $('#company-short-name').value, jobTitle: $('#job-title').value, email }) });
   const data = await response.json(); button.disabled = false; button.textContent = '确认岗位，生成报告';
-  if (!response.ok) { if (data.code === 'EMAIL_NOT_VERIFIED') return showVerification(email); return $('#job-error').textContent = data.error; }
+  if (!response.ok) { if (data.code === 'EMAIL_NOT_VERIFIED') return showVerification(email); setLoading(false); return $('#job-error').textContent = data.error; }
   saveDraft({ report: data.report, reportName: data.reportName, reportUrl: data.reportUrl, emailSent: data.emailSent });
   render(data.report, { reportName: data.reportName, reportUrl: data.reportUrl, emailSent: data.emailSent }); go('report');
 };
@@ -137,7 +151,7 @@ function render(report, meta = {}) {
 }
 
 document.querySelectorAll('[data-back]').forEach(button => button.onclick = () => go(button.dataset.back));
-async function shared() { const match = location.pathname.match(/^\/report\/([^/]+)$/); if (!match) return false; $('#welcome').classList.add('hidden'); $('#flow').classList.remove('hidden'); const response = await fetch(`/api/reports/${encodeURIComponent(match[1])}`); const data = await response.json(); if (response.ok) render(data.report, { reportName: data.reportName, jobTitle: data.jobTitle }); else $('#summary').textContent = data.error; show('report'); return true; }
+async function shared() { const match = location.pathname.match(/^\/report\/([^/]+)$/); if (!match) return false; setLoading(true, '正在打开报告', '读取在线分析结果'); $('#welcome').classList.add('hidden'); $('#flow').classList.remove('hidden'); const response = await fetch(`/api/reports/${encodeURIComponent(match[1])}`); const data = await response.json(); if (response.ok) render(data.report, { reportName: data.reportName, jobTitle: data.jobTitle }); else $('#summary').textContent = data.error; show('report'); setLoading(false); return true; }
 async function verifyEmailPage() {
   const match = location.pathname.match(/^\/verify-email\/([^/]+)$/); if (!match) return false;
   $('#welcome').classList.add('hidden'); $('#flow').classList.add('hidden'); $('#email-verification').classList.remove('hidden');
@@ -147,24 +161,26 @@ async function verifyEmailPage() {
   $('#verification-title').textContent = response.ok ? '邮箱验证成功' : '验证链接不可用';
   $('#verification-copy').textContent = response.ok ? '你的邮箱已经完成验证，现在可以生成并接收岗位分析报告。' : data.error;
   $('#verification-status').textContent = response.ok ? '验证状态已保存到账号。' : '登录后可以重新发送验证邮件。';
-  $('#verification-continue').classList.remove('hidden'); return true;
+  $('#verification-continue').classList.remove('hidden'); setLoading(false); return true;
 }
 async function resumePage() {
   if (location.pathname !== '/my-resume') return false;
+  setLoading(true, '正在打开我的简历', '读取账号中保存的简历版本');
   const session = await fetch('/api/session').then(response => response.json()).catch(() => ({ authenticated: false }));
   if (!session.authenticated) return false;
   if (!session.user.emailVerified) { showVerification(session.user.email); return true; }
   const response = await fetch('/api/resume'); const data = await response.json();
   const main = document.querySelector('main');
   main.innerHTML = '<section class="resume-view"><div class="resume-toolbar"><div><p class="eyebrow">MY_RESUME</p><h1>我的简历</h1></div><div class="resume-actions"><a class="secondary nav-action" href="/resume?mode=replace">更新简历</a><button id="print-resume" class="primary" type="button">打印或保存 PDF</button></div></div><p id="resume-meta" class="fine"></p><article class="resume-document"><pre id="resume-document-text"></pre></article></section>';
-  if (!response.ok || !data.hasResume) { $('#resume-document-text').textContent = response.ok ? '账号中还没有可查看的简历。' : data.error; return true; }
+  if (!response.ok || !data.hasResume) { $('#resume-document-text').textContent = response.ok ? '账号中还没有可查看的简历。' : data.error; setLoading(false); return true; }
   $('#resume-document-text').textContent = data.text;
   $('#resume-meta').textContent = `最近更新：${new Date(data.updatedAt).toLocaleString('zh-CN')}`;
   $('#print-resume').onclick = () => window.print();
-  document.title = '我的简历 - 岗位镜'; return true;
+  document.title = '我的简历 - 岗位镜'; setLoading(false); return true;
 }
 async function reportsPage() { if (location.pathname !== '/reports') return false; const session = await fetch('/api/session').then(response => response.json()); if (!session.authenticated) return false; email = session.user.email; document.querySelector('main').innerHTML = '<section class="flow"><div class="list-head"><div><p class="eyebrow">MY_REPORTS</p><h1>我的分析报告</h1></div><a class="primary nav-action" href="/facts">分析新岗位</a></div><div id="report-list" class="report-list"><p>正在加载报告…</p></div></section>'; const response = await fetch('/api/reports'); const data = await response.json(); const list = $('#report-list'); if (!response.ok) { list.innerHTML = `<p class="error">${safe(data.error)}</p>`; return true; } if (!data.reports.length) { list.innerHTML = '<div class="empty"><strong>还没有报告</strong><p>确认简历事实并提交目标岗位后，报告会保存在这里。</p><a href="/facts">开始第一次分析</a></div>'; return true; } const status = { completed: '已完成', analyzing: '分析中', failed: '失败' }, mail = { sent: '已发送', pending: '待发送', failed: '发送失败', not_configured: '未配置', unknown: '未知' }; list.innerHTML = data.reports.map(item => `<a class="report-row" href="${safe(item.reportUrl || '#')}"><div><strong>${safe(item.reportName)}</strong><small>${new Date(item.createdAt).toLocaleString('zh-CN')}</small></div><span class="status">${safe(status[item.status] || item.status)}</span><span class="mail">邮件：${safe(mail[item.emailStatus] || item.emailStatus)}</span></a>`).join(''); return true; }
 
 const nav = document.createElement('nav'); nav.className = 'header-actions'; nav.innerHTML = '<a href="/my-resume">我的简历</a><a href="/reports">我的报告</a>'; document.querySelector('header').append(nav);
 window.onpopstate = () => enter(email, currentStep());
-verifyEmailPage().then(async isVerification => { if (isVerification) return; if (await resumePage()) return; const isList = await reportsPage(); if (isList) return; if (await shared()) return; const session = await fetch('/api/session').then(response => response.json()).catch(() => ({ authenticated: false })); if (session.authenticated) { if (!session.user.emailVerified) return showVerification(session.user.email); let d = draft(); const stored = await fetch('/api/resume').then(response => response.json()).catch(() => ({ hasResume: false })); if (stored.hasResume) { saveDraft({ resumeText: stored.text, facts: d.facts || stored.text }); d = draft(); } else if (d.resumeText) { await persistResume(d.resumeText).catch(() => {}); } let step = currentStep(); if (step === 'resume' && d.resumeText && !replacingResume()) step = 'facts'; if (step === 'facts' && !d.resumeText) step = 'resume'; if (step === 'job' && !d.facts) step = 'facts'; if (step === 'report' && !d.report) step = d.resumeText ? 'facts' : 'resume'; enter(session.user.email, step); } });
+document.addEventListener('click', event => { const link = event.target.closest('a[href^="/"]'); if (link && !event.defaultPrevented && !event.ctrlKey && !event.metaKey) setLoading(true, '正在切换页面', '正在为你准备下一步'); });
+verifyEmailPage().then(async isVerification => { if (isVerification) return; if (await resumePage()) return; const isList = await reportsPage(); if (isList) { setLoading(false); return; } if (await shared()) return; const session = await fetch('/api/session').then(response => response.json()).catch(() => ({ authenticated: false })); if (!session.authenticated) return showWelcome(); if (session.authenticated) { if (!session.user.emailVerified) return showVerification(session.user.email); let d = draft(); const stored = await fetch('/api/resume').then(response => response.json()).catch(() => ({ hasResume: false })); if (stored.hasResume) { saveDraft({ resumeText: stored.text, facts: d.facts || stored.text }); d = draft(); } else if (d.resumeText) { await persistResume(d.resumeText).catch(() => {}); } let step = currentStep(); if (step === 'resume' && d.resumeText && !replacingResume()) step = 'facts'; if (step === 'facts' && !d.resumeText) step = 'resume'; if (step === 'job' && !d.facts) step = 'facts'; if (step === 'report' && !d.report) step = d.resumeText ? 'facts' : 'resume'; enter(session.user.email, step); } }).catch(() => showWelcome());

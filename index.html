@@ -8,8 +8,13 @@
 </head>
 <body>
   <header><a class="brand" href="/">岗位镜</a><span class="quiet">AI 求职分析</span></header>
+  <div id="app-loading" class="app-loading" role="status" aria-live="polite">
+    <svg class="loading-mark" viewBox="0 0 48 48" aria-hidden="true"><circle class="loading-track" cx="24" cy="24" r="18"></circle><circle class="loading-progress" cx="24" cy="24" r="18"></circle><path class="loading-spark" d="M24 11v5M37 24h-5M24 37v-5M11 24h5"></path></svg>
+    <strong id="loading-title">正在确认账号状态</strong>
+    <span id="loading-tip">请稍候，马上进入正确页面</span>
+  </div>
   <main>
-    <section id="welcome" class="welcome">
+    <section id="welcome" class="welcome hidden">
       <p class="eyebrow">JOB_MIRROR AI</p><h1>先登录，<br>再开始分析。</h1>
       <p class="lead">上传简历和目标岗位，AI 会拆解证据、缺口和可执行的优化方向。</p>
       <form id="onboarding">
