@@ -58,7 +58,10 @@ async function sendReportEmail(email, reportUrl, report) {
   return sendEmail({ to: [email], subject: '你的岗位镜分析报告已完成', html: `<h1>岗位分析已完成</h1><p>${escapeHtml(report.summary || '已生成岗位与简历的分维度分析。')}</p><p><a href="${escapeHtml(reportUrl)}">查看完整分析报告</a></p><p>请保存好此地址。持有链接的人可以查看报告，请勿公开分享。</p>` });
 }
 app.use(express.json());
-app.use(express.static(root));
+const sendApp = (req, res) => res.sendFile(path.join(root, 'index.html'));
+app.get('/', sendApp);
+app.get('/app.js', (req, res) => res.sendFile(path.join(root, 'app.js')));
+app.get('/styles.css', (req, res) => res.sendFile(path.join(root, 'styles.css')));
 app.post('/api/register', async (req, res) => {
   const { email, password } = req.body;
   const normalizedEmail = String(email || '').trim().toLowerCase();
@@ -100,8 +103,10 @@ app.post('/api/analyze', async (req, res) => {
 });
 app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = publicAppUrl(); const reports = db.reports.filter(item => item.userId === user.id || (!item.userId && item.email === user.email)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null })); res.json({ reports }); });
 app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, report: record.report }); });
-app.get('/report/:token', (req, res) => res.sendFile(path.join(root, 'index.html')));
-app.get('/verify-email/:token', (req, res) => res.sendFile(path.join(root, 'index.html')));
-app.get(['/resume', '/facts', '/job', '/report'], (req, res) => res.sendFile(path.join(root, 'index.html')));
-app.get('/reports', (req, res) => res.sendFile(path.join(root, 'index.html')));
-app.listen(process.env.PORT || 3215, () => console.log(`岗位镜运行在 http://localhost:${process.env.PORT || 3215}`));
+app.get('/report/:token', sendApp);
+app.get('/verify-email/:token', sendApp);
+app.get(['/resume', '/facts', '/job', '/report'], sendApp);
+app.get('/reports', sendApp);
+const port = Number(process.env.PORT || 3215);
+const host = process.env.HOST || '127.0.0.1';
+app.listen(port, host, () => console.log(`岗位镜运行在 http://${host}:${port}`));
