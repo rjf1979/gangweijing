@@ -38,7 +38,7 @@ function hydrate(step) {
 }
 function show(step, navigate = false) {
   steps.forEach(id => $(`#${id}-step`)?.classList.toggle('hidden', id !== step));
-  document.querySelectorAll('[data-step-label]').forEach((el, index) => el.classList.toggle('active', steps[index] === step));
+  document.querySelectorAll('[data-step-label]').forEach((el, index) => { const active = steps[index] === step; el.classList.toggle('active', active); if (active) el.setAttribute('aria-current', 'step'); else el.removeAttribute('aria-current'); });
   if (navigate && location.pathname !== routeFor(step)) history.pushState({}, '', routeFor(step));
 }
 function enter(value, step = currentStep()) {
@@ -141,17 +141,27 @@ $('#job-next').onclick = async () => {
 function render(report, meta = {}) {
   $('#report-title').textContent = meta.reportName || draft().reportName || meta.jobTitle || draft().jobTitle || '岗位适配报告';
   $('#summary').textContent = report.summary || '';
-  $('#qualification').innerHTML = `<div class="card"><strong>${safe(report.qualification?.status)}</strong><p>${safe(report.qualification?.evidence)}</p><p>${safe(report.qualification?.risks)}</p></div>`;
+  $('#qualification').innerHTML = `<div class="card"><strong>${safe(report.qualification?.status)}</strong><p>${safe(report.qualification?.evidence)}</p></div>`;
   $('#dimensions').innerHTML = (report.dimensions || []).map(item => `<div class="card"><strong>${safe(item.name)} · ${safe(item.score_0_to_5)}/5</strong><p>${safe(item.evidence)}</p><p>${safe(item.gap)}</p></div>`).join('');
+  const risks = String(report.qualification?.risks || '').split(/[；;。\n]+/).map(s => s.trim()).filter(Boolean);
+  const verifyItems = [...risks, ...(report.verify || [])];
+  $('#verify').innerHTML = verifyItems.length ? `<ul class="risk-list">${verifyItems.map(item => `<li>${safe(item)}</li>`).join('')}</ul>` : '<p class="fine">未发现明显风险或待核实项。</p>';
   $('#rewrite').innerHTML = (report.resume_rewrite || []).map(item => `<div class="card"><strong>${safe(item.section)}</strong><p>${safe(item.original_issue)}</p><p>${safe(item.rewrite_direction)}</p><p>${safe(item.example)}</p></div>`).join('');
   $('#actions').innerHTML = (report.actions || []).map(item => `<li>${safe(item)}</li>`).join('');
-  let box = $('#report-link-box');
-  if (!box) { box = document.createElement('aside'); box.id = 'report-link-box'; box.className = 'report-link'; $('#summary').before(box); }
-  if (meta.reportUrl) { box.innerHTML = `<strong>保存你的报告地址</strong><p>稍后可通过此地址重新查看，请勿公开分享。</p><div><input id="report-url" readonly value="${safe(meta.reportUrl)}"><button id="copy-report" class="secondary">复制地址</button></div><small>${meta.emailSent ? '地址已发送到注册邮箱。' : '邮件暂未发送，请先保存此地址。'}</small>`; $('#copy-report').onclick = async () => { await navigator.clipboard.writeText($('#report-url').value); $('#copy-report').textContent = '已复制'; }; }
+  const box = $('#report-link-box');
+  if (meta.reportUrl) {
+    const node = box || document.createElement('aside');
+    node.id = 'report-link-box'; node.className = 'report-link';
+    node.innerHTML = `<strong>保存你的报告地址</strong><p>稍后可通过此地址重新查看，请勿公开分享。</p><div><input id="report-url" readonly value="${safe(meta.reportUrl)}"><button id="copy-report" class="secondary">复制地址</button></div><small>${meta.emailSent ? '地址已发送到注册邮箱。' : '邮件暂未发送，请先保存此地址。'}</small>`;
+    if (!box) $('#summary').before(node);
+    $('#copy-report').onclick = async () => { await navigator.clipboard.writeText($('#report-url').value); $('#copy-report').textContent = '已复制'; };
+  } else if (box) {
+    box.remove();
+  }
 }
 
 document.querySelectorAll('[data-back]').forEach(button => button.onclick = () => go(button.dataset.back));
-async function shared() { const match = location.pathname.match(/^\/report\/([^/]+)$/); if (!match) return false; setLoading(true, '正在打开报告', '读取在线分析结果'); $('#welcome').classList.add('hidden'); $('#flow').classList.remove('hidden'); const response = await fetch(`/api/reports/${encodeURIComponent(match[1])}`); const data = await response.json(); if (response.ok) render(data.report, { reportName: data.reportName, jobTitle: data.jobTitle }); else $('#summary').textContent = data.error; show('report'); setLoading(false); return true; }
+async function shared() { const match = location.pathname.match(/^\/report\/([^/]+)$/); if (!match) return false; setLoading(true, '正在打开报告', '读取在线分析结果'); $('#welcome').classList.add('hidden'); $('#flow').classList.remove('hidden'); const response = await fetch(`/api/reports/${encodeURIComponent(match[1])}`); const data = await response.json(); if (response.ok) { render(data.report, { reportName: data.reportName, jobTitle: data.jobTitle }); } else { $('#report-title').textContent = '报告不可用'; $('#summary').textContent = ''; $('#qualification').innerHTML = `<div class="neo-alert neo-alert-error">${safe(data.error || '报告加载失败，请稍后重试。')}</div>`; $('#dimensions').innerHTML = ''; $('#verify').innerHTML = ''; $('#rewrite').innerHTML = ''; $('#actions').innerHTML = ''; const box = $('#report-link-box'); if (box) box.remove(); } show('report'); setLoading(false); return true; }
 async function verifyEmailPage() {
   const match = location.pathname.match(/^\/verify-email\/([^/]+)$/); if (!match) return false;
   $('#welcome').classList.add('hidden'); $('#flow').classList.add('hidden'); $('#email-verification').classList.remove('hidden');
@@ -171,16 +181,41 @@ async function resumePage() {
   if (!session.user.emailVerified) { showVerification(session.user.email); return true; }
   const response = await fetch('/api/resume'); const data = await response.json();
   const main = document.querySelector('main');
-  main.innerHTML = '<section class="resume-view"><div class="resume-toolbar"><div><p class="eyebrow">MY_RESUME</p><h1>我的简历</h1></div><div class="resume-actions"><a class="secondary nav-action" href="/resume?mode=replace">更新简历</a><button id="print-resume" class="primary" type="button">打印或保存 PDF</button></div></div><p id="resume-meta" class="fine"></p><article class="resume-document"><pre id="resume-document-text"></pre></article></section>';
+  main.innerHTML = '<section class="resume-view"><div class="resume-toolbar"><div><p class="section-kicker">MY_RESUME</p><h1>我的简历</h1></div><div class="resume-actions"><a class="neo-button neo-button-secondary" href="/resume?mode=replace">更新简历</a><button id="print-resume" class="neo-button neo-button-primary" type="button">打印或保存 PDF</button></div></div><p id="resume-meta" class="fine"></p><article class="resume-document"><pre id="resume-document-text"></pre></article></section>';
   if (!response.ok || !data.hasResume) { $('#resume-document-text').textContent = response.ok ? '账号中还没有可查看的简历。' : data.error; setLoading(false); return true; }
   $('#resume-document-text').textContent = data.text;
   $('#resume-meta').textContent = `最近更新：${new Date(data.updatedAt).toLocaleString('zh-CN')}`;
   $('#print-resume').onclick = () => window.print();
   document.title = '我的简历 - 岗位镜'; setLoading(false); return true;
 }
-async function reportsPage() { if (location.pathname !== '/reports') return false; const session = await fetch('/api/session').then(response => response.json()); if (!session.authenticated) return false; email = session.user.email; document.querySelector('main').innerHTML = '<section class="flow"><div class="list-head"><div><p class="eyebrow">MY_REPORTS</p><h1>我的分析报告</h1></div><a class="primary nav-action" href="/facts">分析新岗位</a></div><div id="report-list" class="report-list"><p>正在加载报告…</p></div></section>'; const response = await fetch('/api/reports'); const data = await response.json(); const list = $('#report-list'); if (!response.ok) { list.innerHTML = `<p class="error">${safe(data.error)}</p>`; return true; } if (!data.reports.length) { list.innerHTML = '<div class="empty"><strong>还没有报告</strong><p>确认简历事实并提交目标岗位后，报告会保存在这里。</p><a href="/facts">开始第一次分析</a></div>'; return true; } const status = { completed: '已完成', analyzing: '分析中', failed: '失败' }, mail = { sent: '已发送', pending: '待发送', failed: '发送失败', not_configured: '未配置', unknown: '未知' }; list.innerHTML = data.reports.map(item => `<a class="report-row" href="${safe(item.reportUrl || '#')}"><div><strong>${safe(item.reportName)}</strong><small>${new Date(item.createdAt).toLocaleString('zh-CN')}</small></div><span class="status">${safe(status[item.status] || item.status)}</span><span class="mail">邮件：${safe(mail[item.emailStatus] || item.emailStatus)}</span></a>`).join(''); return true; }
+async function reportsPage() {
+  if (location.pathname !== '/reports') return false;
+  const session = await fetch('/api/session').then(response => response.json());
+  if (!session.authenticated) return false;
+  email = session.user.email;
+  document.querySelector('main').innerHTML = '<section class="flow"><div class="list-head"><div><p class="section-kicker">MY_REPORTS</p><h1>我的分析报告</h1></div><div class="list-tools"><label for="report-filter">状态</label><select id="report-filter"><option value="all">全部状态</option><option value="completed">已完成</option><option value="analyzing">分析中</option><option value="failed">失败</option></select><a class="neo-button neo-button-primary" href="/facts">分析新岗位</a></div></div><div id="report-list" class="report-list"><p>正在加载报告…</p></div></section>';
+  const response = await fetch('/api/reports');
+  const data = await response.json();
+  const list = $('#report-list');
+  if (!response.ok) { list.innerHTML = `<p class="error">${safe(data.error)}</p>`; return true; }
+  if (!data.reports.length) {
+    list.innerHTML = '<div class="empty"><strong>还没有报告</strong><p>确认简历事实并提交目标岗位后，报告会保存在这里。</p><a href="/facts">开始第一次分析</a></div>';
+    return true;
+  }
+  const status = { completed: '已完成', analyzing: '分析中', failed: '失败' };
+  const mail = { sent: '已发送', pending: '待发送', failed: '发送失败', not_configured: '未配置', unknown: '未知' };
+  const rowHtml = item => `<a class="report-row" href="${safe(item.reportUrl || '#')}"><div><strong>${safe(item.reportName)}</strong><small>${new Date(item.createdAt).toLocaleString('zh-CN')}</small></div><span class="status status-${safe(item.status)}">${safe(status[item.status] || item.status)}</span><span class="mail mail-${safe(item.emailStatus)}">邮件：${safe(mail[item.emailStatus] || item.emailStatus)}</span></a>`;
+  const renderRows = () => {
+    const value = $('#report-filter')?.value || 'all';
+    const rows = value === 'all' ? data.reports : data.reports.filter(item => item.status === value);
+    list.innerHTML = rows.length ? rows.map(rowHtml).join('') : '<div class="empty"><strong>没有符合条件的报告</strong><p>换一个状态筛选，或开始新的岗位分析。</p><a href="/facts">开始第一次分析</a></div>';
+  };
+  $('#report-filter').addEventListener('change', renderRows);
+  renderRows();
+  return true;
+}
 
-const nav = document.createElement('nav'); nav.className = 'header-actions'; nav.innerHTML = '<a href="/my-resume">我的简历</a><a href="/reports">我的报告</a>'; document.querySelector('header').append(nav);
+const nav = document.createElement('nav'); nav.className = 'header-actions'; nav.setAttribute('aria-label', '账户内容'); nav.innerHTML = '<a href="/my-resume">我的简历</a><a href="/reports">我的报告</a>'; document.querySelector('.header-inner').append(nav);
 window.onpopstate = () => enter(email, currentStep());
 document.addEventListener('click', event => { const link = event.target.closest('a[href^="/"]'); if (link && !event.defaultPrevented && !event.ctrlKey && !event.metaKey) setLoading(true, '正在切换页面', '正在为你准备下一步'); });
 verifyEmailPage().then(async isVerification => { if (isVerification) return; if (await resumePage()) return; const isList = await reportsPage(); if (isList) { setLoading(false); return; } if (await shared()) return; const session = await fetch('/api/session').then(response => response.json()).catch(() => ({ authenticated: false })); if (!session.authenticated) return showWelcome(); if (session.authenticated) { if (!session.user.emailVerified) return showVerification(session.user.email); let d = draft(); const stored = await fetch('/api/resume').then(response => response.json()).catch(() => ({ hasResume: false })); if (stored.hasResume) { saveDraft({ resumeText: stored.text, facts: d.facts || stored.text }); d = draft(); } else if (d.resumeText) { await persistResume(d.resumeText).catch(() => {}); } let step = currentStep(); if (step === 'resume' && d.resumeText && !replacingResume()) step = 'facts'; if (step === 'facts' && !d.resumeText) step = 'resume'; if (step === 'job' && !d.facts) step = 'facts'; if (step === 'report' && !d.report) step = d.resumeText ? 'facts' : 'resume'; enter(session.user.email, step); } }).catch(() => showWelcome());

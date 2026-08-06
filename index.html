@@ -3,64 +3,98 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#F7F5EE">
   <title>岗位镜</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='12'%20fill='%23C7FF3D'%20stroke='%23111111'%20stroke-width='5'/%3E%3Ctext%20x='32'%20y='45'%20font-family='Arial,sans-serif'%20font-size='38'%20font-weight='bold'%20text-anchor='middle'%20fill='%23111111'%3E%E5%B2%97%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header><a class="brand" href="/">岗位镜</a><span class="quiet">AI 求职分析</span></header>
-  <div id="app-loading" class="app-loading" role="status" aria-live="polite">
-    <svg class="loading-mark" viewBox="0 0 48 48" aria-hidden="true"><circle class="loading-track" cx="24" cy="24" r="18"></circle><circle class="loading-progress" cx="24" cy="24" r="18"></circle><path class="loading-spark" d="M24 11v5M37 24h-5M24 37v-5M11 24h5"></path></svg>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/" aria-label="岗位镜首页"><span class="brand-mark" aria-hidden="true">岗</span><span>岗位镜</span></a>
+      <span class="quiet">AI 求职分析</span>
+    </div>
+  </header>
+  <div id="app-loading" class="app-loading" role="status" aria-live="polite" aria-atomic="true">
+    <div class="loading-mark" aria-hidden="true"><span></span><span></span><span></span></div>
     <strong id="loading-title">正在确认账号状态</strong>
     <span id="loading-tip">请稍候，马上进入正确页面</span>
   </div>
-  <main>
-    <section id="welcome" class="welcome hidden">
-      <p class="eyebrow">JOB_MIRROR AI</p><h1>先登录，<br>再开始分析。</h1>
-      <p class="lead">上传简历和目标岗位，AI 会拆解证据、缺口和可执行的优化方向。</p>
-      <form id="onboarding">
-        <label>邮箱<input id="onboard-email" type="email" autocomplete="email" required></label>
-        <label>密码<input id="onboard-password" type="password" autocomplete="current-password" minlength="8" required placeholder="至少 8 位"></label>
+  <main id="main-content" tabindex="-1">
+    <section id="welcome" class="welcome auth-layout hidden" aria-labelledby="welcome-title">
+      <div class="auth-intro">
+        <p class="neo-tag neo-tag-lime">JOB_MIRROR AI</p>
+        <h1 id="welcome-title">先登录，<br><mark>再开始分析。</mark></h1>
+        <p class="lead">上传简历和目标岗位，AI 会拆解证据、缺口和可执行的优化方向。</p>
+      </div>
+      <form id="onboarding" class="neo-panel auth-panel">
+        <label for="onboard-email">邮箱</label>
+        <input id="onboard-email" type="email" autocomplete="email" inputmode="email" required>
+        <label for="onboard-password">密码</label>
+        <input id="onboard-password" type="password" autocomplete="current-password" minlength="8" required placeholder="至少 8 位">
         <p id="onboard-error" class="error" role="alert"></p>
-        <button id="auth-submit" class="primary">登录并继续</button>
-        <button id="auth-switch" class="back" type="button">没有账号？注册</button>
+        <button id="auth-submit" class="neo-button neo-button-primary" type="submit">登录并继续</button>
+        <button id="auth-switch" class="text-button" type="button">没有账号？注册</button>
       </form>
     </section>
-    <section id="email-verification" class="welcome hidden" aria-labelledby="verification-title">
-      <p class="eyebrow">EMAIL VERIFICATION</p>
-      <h1 id="verification-title">验证邮箱后继续</h1>
-      <p id="verification-copy" class="lead"></p>
-      <p id="verification-status" class="notice" role="status" aria-live="polite"></p>
-      <button id="resend-verification" class="primary" type="button">重新发送验证邮件</button>
-      <a id="verification-continue" class="primary nav-action hidden" href="/">继续使用岗位镜</a>
+
+    <section id="email-verification" class="welcome verification-layout hidden" aria-labelledby="verification-title">
+      <article class="neo-panel verification-panel">
+        <p class="neo-tag neo-tag-blue">EMAIL VERIFICATION</p>
+        <h1 id="verification-title">验证邮箱后继续</h1>
+        <p id="verification-copy" class="lead"></p>
+        <p id="verification-status" class="neo-alert neo-alert-info" role="status" aria-live="polite"></p>
+        <div class="action-row">
+          <button id="resend-verification" class="neo-button neo-button-primary" type="button">重新发送验证邮件</button>
+          <a id="verification-continue" class="neo-button neo-button-primary hidden" href="/">继续使用岗位镜</a>
+        </div>
+      </article>
     </section>
+
     <section id="flow" class="flow hidden">
-      <nav class="steps" aria-label="分析进度"><span data-step-label="1" class="active">1 简历</span><i></i><span data-step-label="2">2 事实</span><i></i><span data-step-label="3">3 岗位</span><i></i><span data-step-label="4">4 报告</span></nav>
-      <article id="resume-step" class="task">
-        <p class="eyebrow">STEP 01 / 简历</p><h2>上传你的简历</h2><p>支持 PDF、DOCX，也可以直接粘贴文本。</p>
-        <label class="drop"><input id="resume-file" type="file" accept=".pdf,.docx"><strong>选择简历文件</strong><small>文件仅用于本次分析</small></label>
-        <textarea id="resume-text" rows="8" aria-label="简历文本" placeholder="没有文件时，粘贴简历文本"></textarea>
-        <p id="resume-error" class="error" role="alert"></p><button id="resume-next" class="primary">解析简历</button>
+      <nav class="steps" aria-label="分析进度">
+        <span data-step-label="1" class="neo-step active"><b>01</b><em>简历</em></span>
+        <i aria-hidden="true"></i>
+        <span data-step-label="2" class="neo-step"><b>02</b><em>事实</em></span>
+        <i aria-hidden="true"></i>
+        <span data-step-label="3" class="neo-step"><b>03</b><em>岗位</em></span>
+        <i aria-hidden="true"></i>
+        <span data-step-label="4" class="neo-step"><b>04</b><em>报告</em></span>
+      </nav>
+
+      <article id="resume-step" class="task neo-panel" aria-labelledby="resume-title">
+        <div class="panel-heading"><span class="step-index" aria-hidden="true">01</span><div><p class="section-kicker">RESUME</p><h2 id="resume-title">上传你的简历</h2><p>支持 PDF、DOCX，也可以直接粘贴文本。</p></div></div>
+        <label class="drop drop-blue" for="resume-file"><input id="resume-file" type="file" accept=".pdf,.docx"><span class="drop-action">选择简历文件</span><small id="resume-file-status">PDF 或 DOCX，文件仅用于本次分析</small></label>
+        <div class="field-block"><label for="resume-text">简历文本</label><textarea id="resume-text" rows="8" placeholder="没有文件时，在这里粘贴简历文本"></textarea></div>
+        <p id="resume-error" class="error" role="alert"></p>
+        <div class="action-row action-row-end"><button id="resume-next" class="neo-button neo-button-primary" type="button">解析简历</button></div>
       </article>
-      <article id="facts-step" class="task hidden">
-        <p class="eyebrow">STEP 02 / 事实确认</p><h2>确认 AI 读到的事实</h2><p>只保留真实经历，可删改补充。</p>
-        <textarea id="facts-text" rows="14" aria-label="职业事实"></textarea><p id="facts-error" class="error" role="alert"></p>
-        <div class="row"><button class="back" data-back="resume">返回</button><button id="facts-next" class="primary">确认事实，继续</button></div>
+
+      <article id="facts-step" class="task neo-panel hidden" aria-labelledby="facts-title">
+        <div class="panel-heading"><span class="step-index" aria-hidden="true">02</span><div><p class="section-kicker">FACT CHECK</p><h2 id="facts-title">确认简历事实</h2><p>只保留真实经历，删改含糊内容并补充可核实信息。</p></div></div>
+        <div class="field-block fact-editor"><label for="facts-text">职业事实</label><textarea id="facts-text" rows="14"></textarea></div>
+        <p id="facts-error" class="error" role="alert"></p>
+        <div class="action-row"><button class="neo-button neo-button-secondary" data-back="resume" type="button">返回简历</button><button id="facts-next" class="neo-button neo-button-primary" type="button">确认事实，继续</button></div>
       </article>
-      <article id="job-step" class="task hidden">
-        <p class="eyebrow">STEP 03 / 岗位</p><h2>上传目标岗位</h2><p>上传截图后，AI 会识别岗位信息供你确认。</p>
-        <label class="drop"><input id="job-file" type="file" accept="image/*"><strong>选择岗位截图</strong><small>支持 JPG、PNG、WebP</small></label>
-        <textarea id="job-text" rows="10" aria-label="职位描述" placeholder="也可以直接粘贴职位描述"></textarea>
-        <div class="field-row"><label>公司简称<input id="company-short-name" placeholder="例如：字节跳动"></label><label>岗位名称<input id="job-title" placeholder="例如：产品经理"></label></div>
+
+      <article id="job-step" class="task neo-panel hidden" aria-labelledby="job-title-heading">
+        <div class="panel-heading"><span class="step-index" aria-hidden="true">03</span><div><p class="section-kicker">TARGET JOB</p><h2 id="job-title-heading">确认目标岗位</h2><p>上传岗位截图进行识别，或直接粘贴完整职位描述。</p></div></div>
+        <label class="drop drop-blue" for="job-file"><input id="job-file" type="file" accept="image/*"><span class="drop-action">选择岗位截图</span><small id="job-file-status">JPG、PNG 或 WebP</small></label>
+        <div class="field-block"><label for="job-text">职位描述</label><textarea id="job-text" rows="10" placeholder="也可以直接粘贴职位描述"></textarea></div>
+        <div class="field-row"><div class="field-block"><label for="company-short-name">公司简称</label><input id="company-short-name" autocomplete="organization" placeholder="例如：字节跳动"></div><div class="field-block"><label for="job-title">岗位名称</label><input id="job-title" placeholder="例如：产品经理"></div></div>
         <p id="job-error" class="error" role="alert"></p>
-        <div class="row"><button class="back" data-back="facts">返回</button><button id="job-next" class="primary">确认岗位，生成报告</button></div>
+        <div class="action-row"><button class="neo-button neo-button-secondary" data-back="facts" type="button">返回事实</button><button id="job-next" class="neo-button neo-button-primary" type="button">确认岗位，生成报告</button></div>
       </article>
-      <article id="report-step" class="report hidden">
-        <p class="eyebrow">STEP 04 / 在线报告</p><h2 id="report-title">岗位适配报告</h2><p id="summary" class="summary"></p>
-        <section><h3>资格结论与待核实</h3><div id="qualification"></div></section>
-        <section><h3>证据对照</h3><div id="dimensions"></div></section>
-        <section><h3>简历优化建议</h3><div id="rewrite"></div></section>
-        <section><h3>投递前行动</h3><ol id="actions"></ol></section>
-        <button class="back" data-back="job">修改材料后重分析</button>
+
+      <article id="report-step" class="report neo-panel hidden" aria-labelledby="report-title">
+        <div class="report-heading"><p class="neo-tag neo-tag-lime">STEP 04 / 在线报告</p><h2 id="report-title">岗位适配报告</h2><p id="summary" class="summary"></p><p class="report-disclaimer">分析结果基于简历与岗位文本，不代表实际录用概率。</p></div>
+        <section class="neo-section neo-section-green" aria-labelledby="qualification-heading"><h3 id="qualification-heading">总体结论</h3><div id="qualification"></div></section>
+        <section class="neo-section neo-section-blue" aria-labelledby="evidence-heading"><h3 id="evidence-heading">匹配证据</h3><div id="dimensions"></div></section>
+        <section class="neo-section neo-section-pink" aria-labelledby="verify-heading"><h3 id="verify-heading">风险与待核实项</h3><div id="verify"></div></section>
+        <section class="neo-section" aria-labelledby="rewrite-heading"><h3 id="rewrite-heading">简历优化建议</h3><div id="rewrite"></div></section>
+        <section class="neo-section neo-section-lime" aria-labelledby="actions-heading"><h3 id="actions-heading">投递前行动</h3><ol id="actions" class="action-list"></ol></section>
+        <div class="action-row"><button class="neo-button neo-button-secondary" data-back="job" type="button">修改材料后重分析</button></div>
       </article>
     </section>
   </main>
