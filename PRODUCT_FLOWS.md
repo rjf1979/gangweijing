@@ -153,7 +153,7 @@
 4. 失败写入 `emailStatus=failed`，报告仍为 `completed`。
 5. 报告列表提供“重新发送邮件”，不得重新运行 AI 分析。
 
-正式上线时将 `APP_URL` 替换为公开 HTTPS 域名，并使用 Resend 已验证的 ASCII 发件地址。
+验证邮件和报告邮件统一使用环境地址配置。`APP_URL_MODE=local` 时读取 `LOCAL_APP_URL`，`APP_URL_MODE=server` 时读取 `SERVER_APP_URL`。正式上线时将 `SERVER_APP_URL` 配置为公开 HTTPS 域名，并使用 Resend 已验证的 ASCII 发件地址。
 
 ## 11. 流程 I：会话过期恢复
 

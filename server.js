@@ -30,7 +30,11 @@ function reportName(createdAt, companyShortName, jobTitle) {
   return `${date}_${cleanReportPart(companyShortName, '未知公司')}_${cleanReportPart(jobTitle, '未命名岗位')}`;
 }
 const verificationHash = token => crypto.createHash('sha256').update(token).digest('hex');
-const publicAppUrl = () => (process.env.APP_URL || `http://localhost:${process.env.PORT || 3215}`).replace(/\/$/, '');
+const publicAppUrl = () => {
+  const mode = (process.env.APP_URL_MODE || (process.env.NODE_ENV === 'production' ? 'server' : 'local')).toLowerCase();
+  const configuredUrl = mode === 'server' ? process.env.SERVER_APP_URL : process.env.LOCAL_APP_URL;
+  return (configuredUrl || process.env.APP_URL || `http://localhost:${process.env.PORT || 3215}`).replace(/\/$/, '');
+};
 function issueVerification(user) {
   const token = crypto.randomBytes(32).toString('base64url');
   user.emailVerificationTokenHash = verificationHash(token);
@@ -89,12 +93,12 @@ app.post('/api/analyze', async (req, res) => {
     const payload = await callResponses({ model: process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } });
     const report = JSON.parse(outputText(payload) || '{}');
     const createdAt = new Date().toISOString(); const finalCompany = companyShortName || report.company_short_name || ''; const finalJobTitle = jobTitle || report.job_title || ''; const accessToken = crypto.randomBytes(24).toString('base64url'); const record = { id: crypto.randomUUID(), accessToken, userId: user.id, email, companyShortName: finalCompany, jobTitle: finalJobTitle, reportName: reportName(createdAt, finalCompany, finalJobTitle), status: 'completed', emailStatus: 'pending', report, createdAt, updatedAt: createdAt }; db.reports.push(record); await saveDb(db);
-    const appUrl = (process.env.APP_URL || `http://localhost:${process.env.PORT || 3215}`).replace(/\/$/, ''); const reportUrl = `${appUrl}/report/${accessToken}`;
+    const reportUrl = `${publicAppUrl()}/report/${accessToken}`;
     let emailSent = false; try { await sendReportEmail(email, reportUrl, report); emailSent = Boolean(email && process.env.RESEND_API_KEY && process.env.EMAIL_FROM); record.emailStatus = emailSent ? 'sent' : 'not_configured'; } catch (emailError) { record.emailStatus = 'failed'; console.error(emailError.message); } record.updatedAt = new Date().toISOString(); await saveDb(db);
     res.json({ id: record.id, reportName: record.reportName, reportUrl, emailSent, report });
   } catch (error) { res.status(502).json({ error: `AI 分析失败：${error.message}` }); }
 });
-app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = (process.env.APP_URL || `http://localhost:${process.env.PORT || 3215}`).replace(/\/$/, ''); const reports = db.reports.filter(item => item.userId === user.id || (!item.userId && item.email === user.email)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null })); res.json({ reports }); });
+app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = publicAppUrl(); const reports = db.reports.filter(item => item.userId === user.id || (!item.userId && item.email === user.email)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null })); res.json({ reports }); });
 app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, report: record.report }); });
 app.get('/report/:token', (req, res) => res.sendFile(path.join(root, 'index.html')));
 app.get('/verify-email/:token', (req, res) => res.sendFile(path.join(root, 'index.html')));
