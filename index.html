@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>岗位镜</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header><a class="brand" href="/">岗位镜</a><span class="quiet">AI 求职分析</span></header>
+  <main>
+    <section id="welcome" class="welcome">
+      <p class="eyebrow">JOB_MIRROR AI</p><h1>先登录，<br>再开始分析。</h1>
+      <p class="lead">上传简历和目标岗位，AI 会拆解证据、缺口和可执行的优化方向。</p>
+      <form id="onboarding">
+        <label>邮箱<input id="onboard-email" type="email" autocomplete="email" required></label>
+        <label>密码<input id="onboard-password" type="password" autocomplete="current-password" minlength="8" required placeholder="至少 8 位"></label>
+        <p id="onboard-error" class="error" role="alert"></p>
+        <button id="auth-submit" class="primary">登录并继续</button>
+        <button id="auth-switch" class="back" type="button">没有账号？注册</button>
+      </form>
+    </section>
+    <section id="email-verification" class="welcome hidden" aria-labelledby="verification-title">
+      <p class="eyebrow">EMAIL VERIFICATION</p>
+      <h1 id="verification-title">验证邮箱后继续</h1>
+      <p id="verification-copy" class="lead"></p>
+      <p id="verification-status" class="notice" role="status" aria-live="polite"></p>
+      <button id="resend-verification" class="primary" type="button">重新发送验证邮件</button>
+      <a id="verification-continue" class="primary nav-action hidden" href="/">继续使用岗位镜</a>
+    </section>
+    <section id="flow" class="flow hidden">
+      <nav class="steps" aria-label="分析进度"><span data-step-label="1" class="active">1 简历</span><i></i><span data-step-label="2">2 事实</span><i></i><span data-step-label="3">3 岗位</span><i></i><span data-step-label="4">4 报告</span></nav>
+      <article id="resume-step" class="task">
+        <p class="eyebrow">STEP 01 / 简历</p><h2>上传你的简历</h2><p>支持 PDF、DOCX，也可以直接粘贴文本。</p>
+        <label class="drop"><input id="resume-file" type="file" accept=".pdf,.docx"><strong>选择简历文件</strong><small>文件仅用于本次分析</small></label>
+        <textarea id="resume-text" rows="8" aria-label="简历文本" placeholder="没有文件时，粘贴简历文本"></textarea>
+        <p id="resume-error" class="error" role="alert"></p><button id="resume-next" class="primary">解析简历</button>
+      </article>
+      <article id="facts-step" class="task hidden">
+        <p class="eyebrow">STEP 02 / 事实确认</p><h2>确认 AI 读到的事实</h2><p>只保留真实经历，可删改补充。</p>
+        <textarea id="facts-text" rows="14" aria-label="职业事实"></textarea><p id="facts-error" class="error" role="alert"></p>
+        <div class="row"><button class="back" data-back="resume">返回</button><button id="facts-next" class="primary">确认事实，继续</button></div>
+      </article>
+      <article id="job-step" class="task hidden">
+        <p class="eyebrow">STEP 03 / 岗位</p><h2>上传目标岗位</h2><p>上传截图后，AI 会识别岗位信息供你确认。</p>
+        <label class="drop"><input id="job-file" type="file" accept="image/*"><strong>选择岗位截图</strong><small>支持 JPG、PNG、WebP</small></label>
+        <textarea id="job-text" rows="10" aria-label="职位描述" placeholder="也可以直接粘贴职位描述"></textarea>
+        <div class="field-row"><label>公司简称<input id="company-short-name" placeholder="例如：字节跳动"></label><label>岗位名称<input id="job-title" placeholder="例如：产品经理"></label></div>
+        <p id="job-error" class="error" role="alert"></p>
+        <div class="row"><button class="back" data-back="facts">返回</button><button id="job-next" class="primary">确认岗位，生成报告</button></div>
+      </article>
+      <article id="report-step" class="report hidden">
+        <p class="eyebrow">STEP 04 / 在线报告</p><h2 id="report-title">岗位适配报告</h2><p id="summary" class="summary"></p>
+        <section><h3>资格结论与待核实</h3><div id="qualification"></div></section>
+        <section><h3>证据对照</h3><div id="dimensions"></div></section>
+        <section><h3>简历优化建议</h3><div id="rewrite"></div></section>
+        <section><h3>投递前行动</h3><ol id="actions"></ol></section>
+        <button class="back" data-back="job">修改材料后重分析</button>
+      </article>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

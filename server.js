@@ -1,0 +1,103 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import express from 'express';
+import multer from 'multer';
+import mammoth from 'mammoth';
+import { PDFParse } from 'pdf-parse';
+
+const app = express();
+const root = path.resolve('.');
+const dataDir = path.join(root, '.runtime');
+const uploadDir = path.join(dataDir, 'uploads');
+const dbPath = path.join(dataDir, 'db.json');
+await fs.mkdir(uploadDir, { recursive: true });
+try { await fs.access(dbPath); } catch { await fs.writeFile(dbPath, JSON.stringify({ users: [], reports: [] })); }
+const readDb = async () => JSON.parse(await fs.readFile(dbPath, 'utf8'));
+const saveDb = db => fs.writeFile(dbPath, JSON.stringify(db, null, 2));
+const sessionCookie = (token, maxAge = 60 * 60 * 24 * 30) => `jm_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
+function currentSession(req, db) { const token = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('jm_session='))?.split('=')[1]; return db.sessions?.find(x => x.token === token && new Date(x.expiresAt) > new Date()); }
+function currentUser(req, db) { const session = currentSession(req, db); return session && db.users.find(user => user.id === session.userId); }
+const hash = value => crypto.scryptSync(value, 'job-mirror', 64).toString('hex');
+const upload = multer({ dest: uploadDir, limits: { fileSize: 10 * 1024 * 1024 } });
+const aiBaseUrl = () => (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+const outputText = payload => payload.output_text || payload.output?.flatMap(item => item.content || []).find(item => item.type === 'output_text')?.text || '';
+async function callResponses(body) { const response = await fetch(`${aiBaseUrl()}/responses`, { method: 'POST', headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(`GPT 接口返回 ${response.status}`); return response.json(); }
+const escapeHtml = value => String(value || '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+const cleanReportPart = (value, fallback) => String(value || fallback).trim().replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '-').slice(0, 40) || fallback;
+function reportName(createdAt, companyShortName, jobTitle) {
+  const date = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(createdAt)).replace(/\//g, '-');
+  return `${date}_${cleanReportPart(companyShortName, '未知公司')}_${cleanReportPart(jobTitle, '未命名岗位')}`;
+}
+const verificationHash = token => crypto.createHash('sha256').update(token).digest('hex');
+const publicAppUrl = () => (process.env.APP_URL || `http://localhost:${process.env.PORT || 3215}`).replace(/\/$/, '');
+function issueVerification(user) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  user.emailVerificationTokenHash = verificationHash(token);
+  user.emailVerificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  user.verificationSentAt = new Date().toISOString();
+  return token;
+}
+async function sendEmail(message) {
+  if (!process.env.RESEND_API_KEY || !process.env.EMAIL_FROM) throw new Error('邮件服务尚未配置。');
+  const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: process.env.EMAIL_FROM, ...message }) });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.message || `邮件发送失败：${response.status}`);
+  return result.id || null;
+}
+async function sendVerificationEmail(email, token) {
+  const verificationUrl = `${publicAppUrl()}/verify-email/${token}`;
+  return sendEmail({ to: [email], subject: '验证你的岗位镜邮箱', html: `<h1>验证邮箱</h1><p>请点击下面的链接完成岗位镜邮箱验证：</p><p><a href="${escapeHtml(verificationUrl)}">验证邮箱并继续</a></p><p>链接在 24 小时内有效。如果不是你发起的注册，可以忽略此邮件。</p>` });
+}
+async function sendReportEmail(email, reportUrl, report) {
+  if (!email) return;
+  return sendEmail({ to: [email], subject: '你的岗位镜分析报告已完成', html: `<h1>岗位分析已完成</h1><p>${escapeHtml(report.summary || '已生成岗位与简历的分维度分析。')}</p><p><a href="${escapeHtml(reportUrl)}">查看完整分析报告</a></p><p>请保存好此地址。持有链接的人可以查看报告，请勿公开分享。</p>` });
+}
+app.use(express.json());
+app.use(express.static(root));
+app.post('/api/register', async (req, res) => {
+  const { email, password } = req.body;
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!/^\S+@\S+\.\S+$/.test(normalizedEmail) || (password || '').length < 8) return res.status(400).json({ error: '请输入有效邮箱和至少 8 位密码。' });
+  const db = await readDb(); db.sessions ||= []; if (db.users.some(user => user.email === normalizedEmail)) return res.status(409).json({ error: '该邮箱已注册，请直接登录。' });
+  const user = { id: crypto.randomUUID(), email: normalizedEmail, passwordHash: hash(password), emailVerifiedAt: null, createdAt: new Date().toISOString() };
+  const verificationToken = issueVerification(user); db.users.push(user); const token = crypto.randomBytes(32).toString('hex'); db.sessions.push({ token, userId: user.id, expiresAt: new Date(Date.now() + 30 * 86400000).toISOString() }); await saveDb(db);
+  let verificationEmailSent = false; try { user.verificationMessageId = await sendVerificationEmail(user.email, verificationToken); user.verificationEmailStatus = 'sent'; verificationEmailSent = true; } catch (error) { user.verificationEmailStatus = 'failed'; user.verificationEmailError = error.message; } await saveDb(db);
+  res.setHeader('Set-Cookie', sessionCookie(token)); res.json({ user: { id: user.id, email: user.email, emailVerified: false }, verificationEmailSent });
+});
+app.post('/api/login', async (req, res) => { const { email, password } = req.body; const db = await readDb(); db.sessions ||= []; const user = db.users.find(x => x.email === String(email || '').trim().toLowerCase() && x.passwordHash === hash(password || '')); if (!user) return res.status(401).json({ error: '邮箱或密码不正确。' }); const token = crypto.randomBytes(32).toString('hex'); db.sessions.push({ token, userId: user.id, expiresAt: new Date(Date.now() + 30 * 86400000).toISOString() }); await saveDb(db); res.setHeader('Set-Cookie', sessionCookie(token)); res.json({ user: { id: user.id, email: user.email, emailVerified: Boolean(user.emailVerifiedAt) } }); });
+app.get('/api/session', async (req, res) => { const db = await readDb(); const session = currentSession(req, db); const user = session && db.users.find(x => x.id === session.userId); res.json({ authenticated: Boolean(user), user: user ? { id: user.id, email: user.email, emailVerified: Boolean(user.emailVerifiedAt) } : null }); });
+app.post('/api/verification-email', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); if (user.emailVerifiedAt) return res.json({ verified: true }); const elapsed = Date.now() - new Date(user.verificationSentAt || 0).getTime(); if (elapsed < 60000) return res.status(429).json({ error: `请在 ${Math.ceil((60000 - elapsed) / 1000)} 秒后重试。` }); const token = issueVerification(user); await saveDb(db); try { user.verificationMessageId = await sendVerificationEmail(user.email, token); user.verificationEmailStatus = 'sent'; delete user.verificationEmailError; await saveDb(db); res.json({ sent: true }); } catch (error) { user.verificationEmailStatus = 'failed'; user.verificationEmailError = error.message; await saveDb(db); res.status(502).json({ error: `验证邮件发送失败：${error.message}` }); } });
+app.post('/api/verify-email', async (req, res) => { const token = String(req.body?.token || ''); if (!token) return res.status(400).json({ error: '验证链接无效。' }); const db = await readDb(); const tokenHash = verificationHash(token); const user = db.users.find(item => item.emailVerificationTokenHash === tokenHash); if (!user || !user.emailVerificationExpiresAt || new Date(user.emailVerificationExpiresAt) <= new Date()) return res.status(400).json({ error: '验证链接无效或已过期，请重新发送。' }); user.emailVerifiedAt = new Date().toISOString(); delete user.emailVerificationTokenHash; delete user.emailVerificationExpiresAt; delete user.verificationEmailError; user.verificationEmailStatus = 'verified'; await saveDb(db); res.json({ verified: true, email: user.email }); });
+app.get('/api/resume', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); res.json({ hasResume: Boolean(user.resumeText), text: user.resumeText || '' }); });
+app.put('/api/resume', async (req, res) => { const text = String(req.body?.text || '').trim(); if (!text) return res.status(400).json({ error: '简历内容不能为空。' }); const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); user.resumeText = text; user.resumeUpdatedAt = new Date().toISOString(); await saveDb(db); res.json({ saved: true }); });
+async function extractResume(file) {
+  if (file.mimetype === 'application/pdf') { const parser = new PDFParse({ data: await fs.readFile(file.path) }); const result = await parser.getText(); await parser.destroy(); return result.text; }
+  if (file.mimetype.includes('wordprocessingml')) return (await mammoth.extractRawText({ path: file.path })).value;
+  throw new Error('仅支持 PDF 或 DOCX 简历。');
+}
+app.post('/api/extract/resume', upload.single('resume'), async (req, res) => { try { res.json({ text: await extractResume(req.file) }); } catch (error) { res.status(400).json({ error: error.message }); } });
+app.post('/api/extract/screenshot', upload.single('screenshot'), async (req, res) => { try { if (!req.file?.mimetype.startsWith('image/')) return res.status(400).json({ error: '请上传有效的岗位截图。' }); if (!process.env.OPENAI_API_KEY) return res.status(503).json({ error: '尚未配置 AI 接口。' }); const image = `data:${req.file.mimetype};base64,${(await fs.readFile(req.file.path)).toString('base64')}`; const prompt = '识别这张招聘岗位截图。完整保留职责、要求、薪资、地点、公司和岗位名称，不要补充图片中不存在的信息。输出严格 JSON：{"company_short_name":"","job_title":"","text":"","warnings":[]}。公司简称应去掉有限公司等工商后缀；无法确认的内容留空并放入 warnings。'; const payload = await callResponses({ model: process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: image }] }], text: { format: { type: 'json_object' } } }); const result = JSON.parse(outputText(payload) || '{}'); res.json({ text: result.text || '', companyShortName: result.company_short_name || '', jobTitle: result.job_title || '', warnings: result.warnings || [] }); } catch (error) { res.status(502).json({ error: `AI 截图识别失败：${error.message}` }); } });
+app.post('/api/analyze', async (req, res) => {
+  if (!process.env.OPENAI_API_KEY) return res.status(503).json({ error: '尚未配置 OPENAI_API_KEY，不能生成真实 AI 报告。' });
+  const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录后生成报告。' });
+  if (!user.emailVerifiedAt) return res.status(403).json({ error: '请先验证注册邮箱，再生成分析报告。', code: 'EMAIL_NOT_VERIFIED' });
+  const { resumeText, jobText, jobTitle, companyShortName } = req.body; const email = user.email;
+  if (!resumeText || !jobText) return res.status(400).json({ error: '请先提供简历文本和岗位内容。' });
+  const prompt = `你是严谨的中文职业顾问。只依据给出的简历与岗位内容分析，不能承诺 offer 或虚构经历。输出严格 JSON：{company_short_name,job_title,summary, qualification:{status,evidence,risks}, dimensions:[{name,score_0_to_5,evidence,gap}], verify:[string], resume_rewrite:[{section,original_issue,rewrite_direction,example}], actions:[string]}。company_short_name 去掉有限公司等工商后缀。公司简称：${companyShortName || '请从岗位正文识别'}\n岗位名称：${jobTitle || '请从岗位正文识别'}\n岗位内容：${jobText}\n简历：${resumeText}`;
+  try {
+    const payload = await callResponses({ model: process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } });
+    const report = JSON.parse(outputText(payload) || '{}');
+    const createdAt = new Date().toISOString(); const finalCompany = companyShortName || report.company_short_name || ''; const finalJobTitle = jobTitle || report.job_title || ''; const accessToken = crypto.randomBytes(24).toString('base64url'); const record = { id: crypto.randomUUID(), accessToken, userId: user.id, email, companyShortName: finalCompany, jobTitle: finalJobTitle, reportName: reportName(createdAt, finalCompany, finalJobTitle), status: 'completed', emailStatus: 'pending', report, createdAt, updatedAt: createdAt }; db.reports.push(record); await saveDb(db);
+    const appUrl = (process.env.APP_URL || `http://localhost:${process.env.PORT || 3215}`).replace(/\/$/, ''); const reportUrl = `${appUrl}/report/${accessToken}`;
+    let emailSent = false; try { await sendReportEmail(email, reportUrl, report); emailSent = Boolean(email && process.env.RESEND_API_KEY && process.env.EMAIL_FROM); record.emailStatus = emailSent ? 'sent' : 'not_configured'; } catch (emailError) { record.emailStatus = 'failed'; console.error(emailError.message); } record.updatedAt = new Date().toISOString(); await saveDb(db);
+    res.json({ id: record.id, reportName: record.reportName, reportUrl, emailSent, report });
+  } catch (error) { res.status(502).json({ error: `AI 分析失败：${error.message}` }); }
+});
+app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = (process.env.APP_URL || `http://localhost:${process.env.PORT || 3215}`).replace(/\/$/, ''); const reports = db.reports.filter(item => item.userId === user.id || (!item.userId && item.email === user.email)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null })); res.json({ reports }); });
+app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, report: record.report }); });
+app.get('/report/:token', (req, res) => res.sendFile(path.join(root, 'index.html')));
+app.get('/verify-email/:token', (req, res) => res.sendFile(path.join(root, 'index.html')));
+app.get(['/resume', '/facts', '/job', '/report'], (req, res) => res.sendFile(path.join(root, 'index.html')));
+app.get('/reports', (req, res) => res.sendFile(path.join(root, 'index.html')));
+app.listen(process.env.PORT || 3215, () => console.log(`岗位镜运行在 http://localhost:${process.env.PORT || 3215}`));

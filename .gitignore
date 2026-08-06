@@ -1,0 +1,35 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+云服务器配置.txt
+
+# Runtime data and user uploads
+.runtime/
+uploads/
+*.log
+logs/
+
+# Dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+
+# Obsolete local OCR assets
+*.traineddata
+
+# Local tooling and editor state
+.codex/
+.agents/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
