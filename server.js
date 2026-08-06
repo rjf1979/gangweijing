@@ -5,6 +5,7 @@ import express from 'express';
 import multer from 'multer';
 import mammoth from 'mammoth';
 import { PDFParse } from 'pdf-parse';
+import { createPgStore } from './db.js';
 
 const app = express();
 const root = path.resolve('.');
@@ -13,8 +14,10 @@ const uploadDir = path.join(dataDir, 'uploads');
 const dbPath = path.join(dataDir, 'db.json');
 await fs.mkdir(uploadDir, { recursive: true });
 try { await fs.access(dbPath); } catch { await fs.writeFile(dbPath, JSON.stringify({ users: [], reports: [] })); }
-const readDb = async () => JSON.parse(await fs.readFile(dbPath, 'utf8'));
-const saveDb = db => fs.writeFile(dbPath, JSON.stringify(db, null, 2));
+const dbStore = createPgStore();
+await dbStore.init();
+const readDb = () => dbStore.readDb();
+const saveDb = db => dbStore.saveDb(db);
 const sessionCookie = (token, maxAge = 60 * 60 * 24 * 30) => `jm_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
 function currentSession(req, db) { const token = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('jm_session='))?.split('=')[1]; return db.sessions?.find(x => x.token === token && new Date(x.expiresAt) > new Date()); }
 function currentUser(req, db) { const session = currentSession(req, db); return session && db.users.find(user => user.id === session.userId); }
