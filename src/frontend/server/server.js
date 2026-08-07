@@ -52,7 +52,58 @@ const normalizeResumeFileName = name => {
 };
 const aiBaseUrl = () => (appConfig.openaiBaseUrl || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 const outputText = payload => payload.output_text || payload.output?.flatMap(item => item.content || []).find(item => item.type === 'output_text')?.text || '';
-async function callResponses(body) { await refreshAppConfig(); const response = await fetch(`${aiBaseUrl()}/responses`, { method: 'POST', headers: { Authorization: `Bearer ${appConfig.openaiApiKey || process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(`GPT 接口返回 ${response.status}`); return response.json(); }
+const parseJsonText = text => {
+  const raw = String(text || '').trim();
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const candidate = fenced ? fenced[1] : raw;
+  try { return JSON.parse(candidate); } catch { try { return JSON.parse(raw); } catch { return {}; } }
+};
+const extractText = payload => {
+  const chat = payload?.choices?.[0]?.message?.content;
+  if (typeof chat === 'string') return chat;
+  if (Array.isArray(chat)) return chat.map(item => item?.text || item?.content || '').join('');
+  return outputText(payload);
+};
+const extractUsage = (payload, model) => {
+  if (!payload?.usage) return null;
+  const u = payload.usage;
+  const inputTokens = Number(u.input_tokens ?? u.prompt_tokens ?? 0);
+  const outputTokens = Number(u.output_tokens ?? u.completion_tokens ?? 0);
+  return { model, inputTokens, outputTokens, totalTokens: Number(u.total_tokens ?? (inputTokens + outputTokens)) };
+};
+
+// 模型单价（美元 / 百万 tokens），OpenAI 官方公开价目，用于估算报告费用（非账单）
+const MODEL_PRICES = {
+  'gpt-4o': { input: 2.5, output: 10 },
+  'gpt-4o-mini': { input: 0.15, output: 0.6 },
+  'gpt-4.1': { input: 2, output: 8 },
+  'gpt-4.1-mini': { input: 0.4, output: 1.6 },
+  'gpt-4.1-nano': { input: 0.1, output: 0.4 },
+  'gpt-4-turbo': { input: 10, output: 30 },
+  'gpt-4': { input: 30, output: 60 },
+  'gpt-3.5-turbo': { input: 0.5, output: 1.5 },
+  'o1': { input: 15, output: 60 },
+  'o1-mini': { input: 3, output: 12 },
+  'o3': { input: 2, output: 8 },
+  'o3-mini': { input: 1.1, output: 4.4 },
+};
+const estimateCost = async (model, inputTokens, outputTokens) => {
+  const key = String(model || '').toLowerCase();
+  let price = null;
+  try {
+    const row = await dbStore.findAiModelByModelId(key);
+    if (row && row.inputPrice != null && row.outputPrice != null) price = { input: row.inputPrice, output: row.outputPrice };
+  } catch {}
+  if (!price) price = MODEL_PRICES[key] || MODEL_PRICES[key.split('/').pop()];
+  if (!price) return null;
+  return (Number(inputTokens) / 1e6) * price.input + (Number(outputTokens) / 1e6) * price.output;
+};
+async function callResponses(body, opts = {}) { await refreshAppConfig(); const base = (opts.baseUrl || aiBaseUrl()).replace(/\/$/, ''); const key = opts.apiKey || appConfig.openaiApiKey || process.env.OPENAI_API_KEY; const response = await fetch(`${base}/responses`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(`AI 接口返回 ${response.status}`); return response.json(); }
+async function callChatCompletions(body, opts = {}) { await refreshAppConfig(); const base = (opts.baseUrl || aiBaseUrl()).replace(/\/$/, ''); const key = opts.apiKey || appConfig.openaiApiKey || process.env.OPENAI_API_KEY; const response = await fetch(`${base}/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(`AI 接口返回 ${response.status}`); return response.json(); }
+async function resolveAiModel(modelType) {
+  try { const row = await dbStore.getDefaultAiModel(modelType); if (row) return row; } catch (error) { console.error('读取主模型失败：', error.message); }
+  return null;
+}
 const escapeHtml = value => String(value || '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const cleanReportPart = (value, fallback) => String(value || fallback).trim().replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '-').slice(0, 40) || fallback;
 function reportName(createdAt, companyShortName, jobTitle) {
@@ -182,7 +233,17 @@ app.post('/api/extract/resume', upload.single('resume'), async (req, res) => {
     res.status(400).json({ error: error.message });
   }
 });
-app.post('/api/extract/screenshot', upload.single('screenshot'), async (req, res) => { try { if (!req.file?.mimetype.startsWith('image/')) return res.status(400).json({ error: '请上传有效的岗位截图。' }); await refreshAppConfig(); if (!(appConfig.openaiApiKey || process.env.OPENAI_API_KEY)) return res.status(503).json({ error: '尚未配置 AI 接口。' }); const image = `data:${req.file.mimetype};base64,${(await fs.readFile(req.file.path)).toString('base64')}`; const prompt = '识别这张招聘岗位截图。完整保留职责、要求、薪资、地点、公司和岗位名称，不要补充图片中不存在的信息。输出严格 JSON：{"company_short_name":"","job_title":"","text":"","warnings":[]}。公司简称应去掉有限公司等工商后缀；无法确认的内容留空并放入 warnings。'; const payload = await callResponses({ model: appConfig.openaiVisionModel || process.env.OPENAI_VISION_MODEL || appConfig.openaiModel || process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: image }] }], text: { format: { type: 'json_object' } } }); const result = JSON.parse(outputText(payload) || '{}'); res.json({ text: result.text || '', companyShortName: result.company_short_name || '', jobTitle: result.job_title || '', warnings: result.warnings || [] }); } catch (error) { res.status(502).json({ error: `AI 截图识别失败：${error.message}` }); } finally { if (req.file?.path) await fs.unlink(req.file.path).catch(() => {}); } });
+app.post('/api/extract/screenshot', upload.single('screenshot'), async (req, res) => { try { if (!req.file?.mimetype.startsWith('image/')) return res.status(400).json({ error: '请上传有效的岗位截图。' }); await refreshAppConfig(); if (!(appConfig.openaiApiKey || process.env.OPENAI_API_KEY)) return res.status(503).json({ error: '尚未配置 AI 接口。' }); const image = `data:${req.file.mimetype};base64,${(await fs.readFile(req.file.path)).toString('base64')}`; const prompt = '识别这张招聘岗位截图。完整保留职责、要求、薪资、地点、公司和岗位名称，不要补充图片中不存在的信息。输出严格 JSON：{"company_short_name":"","job_title":"","text":"","warnings":[]}。公司简称应去掉有限公司等工商后缀；无法确认的内容留空并放入 warnings。'; const activeOcr = await resolveAiModel('ocr');
+    const ocrOpts = activeOcr?.apiBaseUrl ? { baseUrl: activeOcr.apiBaseUrl } : {};
+    let payload;
+    if (activeOcr?.apiProtocol === 'responses') {
+      payload = await callResponses({ model: activeOcr.modelId, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: image }] }], text: { format: { type: 'json_object' } } }, ocrOpts);
+    } else if (activeOcr) {
+      payload = await callChatCompletions({ model: activeOcr.modelId, messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: image } }] }], response_format: { type: 'json_object' } }, ocrOpts);
+    } else {
+      payload = await callResponses({ model: appConfig.openaiVisionModel || process.env.OPENAI_VISION_MODEL || appConfig.openaiModel || process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: image }] }], text: { format: { type: 'json_object' } } });
+    }
+    const result = parseJsonText(extractText(payload)); res.json({ text: result.text || '', companyShortName: result.company_short_name || '', jobTitle: result.job_title || '', warnings: result.warnings || [] }); } catch (error) { res.status(502).json({ error: `AI 截图识别失败：${error.message}` }); } finally { if (req.file?.path) await fs.unlink(req.file.path).catch(() => {}); } });
 app.post('/api/analyze', async (req, res) => {
   await refreshAppConfig(); if (!(appConfig.openaiApiKey || process.env.OPENAI_API_KEY)) return res.status(503).json({ error: '尚未配置 OPENAI_API_KEY，不能生成真实 AI 报告。' });
   const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录后生成报告。' });
@@ -191,9 +252,22 @@ app.post('/api/analyze', async (req, res) => {
   if (!resumeText || !jobText) return res.status(400).json({ error: '请先提供简历文本和岗位内容。' });
   const prompt = `你是严谨的中文职业顾问。只依据给出的简历与岗位内容分析，不能承诺 offer 或虚构经历。输出严格 JSON：{company_short_name,job_title,summary, qualification:{status,evidence,risks}, dimensions:[{name,score_0_to_5,evidence,gap}], verify:[string], resume_rewrite:[{section,original_issue,rewrite_direction,example}], actions:[string]}。company_short_name 去掉有限公司等工商后缀。公司简称：${companyShortName || '请从岗位正文识别'}\n岗位名称：${jobTitle || '请从岗位正文识别'}\n岗位内容：${jobText}\n简历：${resumeText}`;
   try {
-    const payload = await callResponses({ model: appConfig.openaiModel || process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } });
-    const report = JSON.parse(outputText(payload) || '{}');
-    const createdAt = new Date().toISOString(); const finalCompany = companyShortName || report.company_short_name || ''; const finalJobTitle = jobTitle || report.job_title || ''; const accessToken = crypto.randomBytes(24).toString('base64url'); const record = { id: crypto.randomUUID(), accessToken, userId: user.id, email, companyShortName: finalCompany, jobTitle: finalJobTitle, reportName: reportName(createdAt, finalCompany, finalJobTitle), status: 'completed', emailStatus: 'pending', report, createdAt, updatedAt: createdAt }; db.reports.push(record); await saveDb(db);
+    const active = await resolveAiModel('text');
+    let payload;
+    let usedModel;
+    const callOpts = active?.apiBaseUrl ? { baseUrl: active.apiBaseUrl } : {};
+    if (active?.apiProtocol === 'responses') {
+      payload = await callResponses({ model: active.modelId, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } }, callOpts);
+    } else if (active) {
+      payload = await callChatCompletions({ model: active.modelId, messages: [{ role: 'user', content: prompt }], temperature: 0.2, response_format: { type: 'json_object' } }, callOpts);
+    } else {
+      payload = await callResponses({ model: appConfig.openaiModel || process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } });
+    }
+    usedModel = active?.modelId || appConfig.openaiModel || process.env.OPENAI_MODEL;
+    const report = parseJsonText(extractText(payload));
+    const usage = extractUsage(payload, usedModel);
+    const costUsd = usage ? await estimateCost(usage.model, usage.inputTokens, usage.outputTokens) : null;
+    const createdAt = new Date().toISOString(); const finalCompany = companyShortName || report.company_short_name || ''; const finalJobTitle = jobTitle || report.job_title || ''; const accessToken = crypto.randomBytes(24).toString('base64url'); const record = { id: crypto.randomUUID(), accessToken, userId: user.id, email, companyShortName: finalCompany, jobTitle: finalJobTitle, reportName: reportName(createdAt, finalCompany, finalJobTitle), status: 'completed', emailStatus: 'pending', report, usage, costUsd, createdAt, updatedAt: createdAt }; db.reports.push(record); await saveDb(db);
     const reportUrl = `${publicAppUrl()}/report/${accessToken}`;
     let emailSent = false; try { await sendReportEmail(email, reportUrl, report); emailSent = Boolean(email && (appConfig.resendApiKey || process.env.RESEND_API_KEY) && (appConfig.emailFrom || process.env.EMAIL_FROM)); record.emailStatus = emailSent ? 'sent' : 'not_configured'; } catch (emailError) { record.emailStatus = 'failed'; console.error(emailError.message); } record.updatedAt = new Date().toISOString(); await saveDb(db);
     res.json({ id: record.id, reportName: record.reportName, reportUrl, emailSent, report });

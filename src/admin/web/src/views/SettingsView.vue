@@ -46,9 +46,14 @@
       <section class="card">
         <div class="card-head">
           <h2 class="card-title">AI 分析配置</h2>
-          <span class="badge" :class="settings?.openai_api_key_masked || environment.openaiEnvConfigured ? 'badge-success' : 'badge-neutral'">
-            {{ settings?.openai_api_key_masked || environment.openaiEnvConfigured ? '已配置' : '未配置' }}
-          </span>
+          <div class="card-head-actions">
+            <RouterLink class="btn btn-sm" to="/ai-settings">
+              <AppIcon name="spark" :size="14" /> 管理 AI 模型
+            </RouterLink>
+            <span class="badge" :class="settings?.openai_api_key_masked || environment.openaiEnvConfigured ? 'badge-success' : 'badge-neutral'">
+              {{ settings?.openai_api_key_masked || environment.openaiEnvConfigured ? '已配置' : '未配置' }}
+            </span>
+          </div>
         </div>
         <form class="card-body settings-form" novalidate @submit.prevent="saveAiConfig">
           <div class="form-grid">
@@ -72,12 +77,12 @@
             <div class="field">
               <label class="field-label" for="ai-model">对话模型</label>
               <input id="ai-model" v-model.trim="aiForm.model" class="input" placeholder="gpt-4o" />
-              <p class="field-hint">用于简历内容分析，留空则使用环境变量或默认模型。</p>
+              <p class="field-hint">预留的兜底模型；若已在「AI 设置」配置并启用默认文本模型，则以模型库为准。</p>
             </div>
             <div class="field">
               <label class="field-label" for="ai-vision-model">视觉模型</label>
               <input id="ai-vision-model" v-model.trim="aiForm.visionModel" class="input" placeholder="gpt-4o-mini" />
-              <p class="field-hint">用于简历截图 OCR 识别，留空则回退到对话模型。</p>
+              <p class="field-hint">预留的兜底视觉模型；若已在「AI 设置」配置并启用默认 OCR 模型，则以模型库为准。</p>
             </div>
           </div>
           <div class="field">
@@ -504,6 +509,12 @@ onMounted(load)
 .form-actions {
   display: flex;
   justify-content: flex-end;
+}
+
+.card-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .grid-2 {

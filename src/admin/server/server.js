@@ -95,6 +95,121 @@ const maskSecret = value => {
   return s.length <= 8 ? '••••••••' : '••••••••' + s.slice(-4);
 };
 const isMasked = value => typeof value === 'string' && /[•*]/.test(value);
+const parseNullableNumber = value => {
+  if (value === '' || value === null || value === undefined) return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+const parseNullableInt = value => {
+  if (value === '' || value === null || value === undefined) return null;
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+// 大模型公司预设名称（用于选择与展示，参考价目按厂商归类）
+const MODEL_TYPES = ['text', 'ocr'];
+const API_PROTOCOLS = ['chat_completions', 'responses'];
+const PROVIDER_LABELS = {
+  openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', deepseek: 'DeepSeek',
+  qwen: '阿里通义千问', 'z-ai': '智谱 GLM', moonshotai: 'Kimi（月之暗面）', moonshot: 'Kimi（月之暗面）',
+  minimax: 'MiniMax', stepfun: '阶跃星辰', '01-ai': '零一万物', baichuan: '百川智能',
+  mistralai: 'Mistral', 'meta-llama': 'Meta', 'x-ai': 'xAI', amazon: 'AWS Bedrock',
+  microsoft: '微软 Azure', cohere: 'Cohere', perplexity: 'Perplexity', baidu: '百度',
+  tencent: '腾讯混元', nvidia: 'NVIDIA', internlm: '书生 InternLM',
+};
+// 参考价目抓取只保留这些知名国内外厂商（OpenRouter 前缀）
+const REFERENCE_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'deepseek', 'qwen', 'z-ai', 'moonshotai', 'moonshot', 'minimax', 'stepfun', '01-ai', 'baichuan', 'mistralai', 'meta-llama', 'x-ai', 'amazon', 'microsoft', 'cohere', 'perplexity', 'baidu', 'tencent', 'nvidia', 'internlm']);
+
+// 模型类型 / 接口协议 的可选值与中文标签（供前端下拉选择）
+const MODEL_TYPE_LABELS = { text: '文本模型', ocr: 'OCR 模型' };
+const API_PROTOCOL_LABELS = { chat_completions: 'Chat Completions（/chat/completions）', responses: 'Responses API（/responses）' };
+
+// 各大模型厂商常见模型 ID 建议（文本 / OCR），仅作为填写时的候选提示，不限制自定义
+const PROVIDER_KNOWN_MODELS = {
+  openai: { text: ['gpt-5', 'gpt-5-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o3', 'o3-mini', 'o4-mini'], ocr: ['gpt-5', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini'] },
+  anthropic: { text: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022'], ocr: ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022'] },
+  google: { text: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'], ocr: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'] },
+  deepseek: { text: ['deepseek-chat', 'deepseek-reasoner'], ocr: [] },
+  qwen: { text: ['qwen-max', 'qwen-plus', 'qwen-turbo', 'qwen3-max', 'qwen3-plus'], ocr: ['qwen-vl-max', 'qwen-vl-plus', 'qwen2.5-vl-72b-instruct', 'qwen2.5-vl-7b-instruct'] },
+  'z-ai': { text: ['glm-4.5', 'glm-4-plus', 'glm-4-air', 'glm-4-flash', 'glm-4-long'], ocr: ['glm-4v-plus', 'glm-4v-flash', 'glm-4.1v-thinking-flash'] },
+  moonshotai: { text: ['kimi-k2-0711-preview', 'kimi-k2-turbo-preview', 'moonshot-v1-128k', 'moonshot-v1-32k', 'moonshot-v1-8k'], ocr: [] },
+  moonshot: { text: ['kimi-k2-0711-preview', 'kimi-k2-turbo-preview', 'moonshot-v1-128k', 'moonshot-v1-32k', 'moonshot-v1-8k'], ocr: [] },
+  minimax: { text: ['MiniMax-Text-01', 'abab6.5s-chat'], ocr: ['MiniMax-VL-01'] },
+  stepfun: { text: ['step-2-16k', 'step-1-32k'], ocr: ['step-1v-32k', 'step-1o-vision'] },
+  '01-ai': { text: ['yi-lightning', 'yi-large', 'yi-medium'], ocr: ['yi-vision'] },
+  baichuan: { text: ['Baichuan4', 'Baichuan3-Turbo'], ocr: [] },
+  mistralai: { text: ['mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest'], ocr: ['pixtral-large-latest'] },
+  'meta-llama': { text: ['meta-llama/llama-3.3-70b-instruct', 'meta-llama/llama-3.1-405b-instruct'], ocr: ['meta-llama/llama-3.2-90b-vision-instruct'] },
+  'x-ai': { text: ['grok-3', 'grok-2-latest', 'grok-beta'], ocr: ['grok-4-vision', 'grok-2-vision-latest'] },
+  amazon: { text: ['amazon.nova-pro-v1:0', 'amazon.nova-lite-v1:0'], ocr: ['amazon.nova-pro-v1:0'] },
+  microsoft: { text: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'], ocr: ['gpt-4o', 'gpt-4o-mini'] },
+  cohere: { text: ['command-r-plus', 'command-r'], ocr: [] },
+  perplexity: { text: ['sonar-pro', 'sonar'], ocr: [] },
+  baidu: { text: ['ernie-4.0-turbo-8k', 'ernie-3.5-8k'], ocr: ['ernie-4.5-vl-28k', 'ernie-4.0-vl-8k'] },
+  tencent: { text: ['hunyuan-turbos-latest', 'hunyuan-pro'], ocr: ['hunyuan-vision'] },
+  nvidia: { text: ['meta/llama-3.3-70b-instruct', 'deepseek-ai/deepseek-r1'], ocr: ['nvidia/llama-3.2-90b-vision-instruct'] },
+  internlm: { text: ['internlm3.5-22b-chat', 'internlm2.5-20b-chat'], ocr: ['internlm-xcomposer2.5-7b'] },
+};
+
+// 各大模型厂商默认 API 地址与官网价目页（填写时自动作为占位提示，可覆盖）
+const PROVIDER_DEFAULTS = {
+  openai: { apiBaseUrl: 'https://api.openai.com/v1', officialUrl: 'https://openai.com/api/pricing/' },
+  anthropic: { apiBaseUrl: 'https://api.anthropic.com/v1', officialUrl: 'https://www.anthropic.com/pricing' },
+  google: { apiBaseUrl: 'https://generativelanguage.googleapis.com/v1beta', officialUrl: 'https://ai.google.dev/gemini-api/docs/pricing' },
+  deepseek: { apiBaseUrl: 'https://api.deepseek.com/v1', officialUrl: 'https://api-docs.deepseek.com/quick_start/pricing' },
+  qwen: { apiBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', officialUrl: 'https://help.aliyun.com/zh/model-studio/models' },
+  'z-ai': { apiBaseUrl: 'https://open.bigmodel.cn/api/paas/v4', officialUrl: 'https://open.bigmodel.cn/pricing' },
+  moonshotai: { apiBaseUrl: 'https://api.moonshot.cn/v1', officialUrl: 'https://platform.moonshot.cn/docs/pricing' },
+  moonshot: { apiBaseUrl: 'https://api.moonshot.cn/v1', officialUrl: 'https://platform.moonshot.cn/docs/pricing' },
+  minimax: { apiBaseUrl: 'https://api.minimax.chat/v1', officialUrl: 'https://platform.minimaxi.com/document/price' },
+  stepfun: { apiBaseUrl: 'https://api.stepfun.com/v1', officialUrl: 'https://platform.stepfun.com/docs/pricing' },
+  '01-ai': { apiBaseUrl: 'https://api.lingyiwanwu.com/v1', officialUrl: 'https://platform.lingyiwanwu.com/docs' },
+  baichuan: { apiBaseUrl: 'https://api.baichuan-ai.com/v1', officialUrl: 'https://platform.baichuan-ai.com/price' },
+  mistralai: { apiBaseUrl: 'https://api.mistral.ai/v1', officialUrl: 'https://mistral.ai/pricing' },
+  'meta-llama': { apiBaseUrl: 'https://api.together.xyz/v1', officialUrl: 'https://ai.meta.com/llama/' },
+  'x-ai': { apiBaseUrl: 'https://api.x.ai/v1', officialUrl: 'https://docs.x.ai/docs/models' },
+  amazon: { apiBaseUrl: '', officialUrl: 'https://aws.amazon.com/bedrock/pricing/' },
+  microsoft: { apiBaseUrl: 'https://<your-resource>.openai.azure.com/openai/v1', officialUrl: 'https://azure.microsoft.com/pricing/details/cognitive-services/openai-service/' },
+  cohere: { apiBaseUrl: 'https://api.cohere.com/v1', officialUrl: 'https://cohere.com/pricing' },
+  perplexity: { apiBaseUrl: 'https://api.perplexity.ai', officialUrl: 'https://docs.perplexity.ai/guides/pricing' },
+  baidu: { apiBaseUrl: 'https://qianfan.baidubce.com/v2', officialUrl: 'https://cloud.baidu.com/doc/WENXINWORKSHOP/s/hlrk4akp7' },
+  tencent: { apiBaseUrl: 'https://api.hunyuan.cloud.tencent.com/v1', officialUrl: 'https://cloud.tencent.com/document/product/1729/97731' },
+  nvidia: { apiBaseUrl: 'https://integrate.api.nvidia.com/v1', officialUrl: 'https://build.nvidia.com/' },
+  internlm: { apiBaseUrl: 'https://api.intern-ai.org.cn/v1', officialUrl: 'https://internlm.intern-ai.org.cn/' },
+};
+
+function parseAiModelBody(body, partial = false) {
+  const out = {};
+  if (!partial || 'provider' in body) {
+    const provider = String(body?.provider || '').trim();
+    if (!provider) return { error: '请选择或填写大模型公司名称。' };
+    out.provider = provider;
+  }
+  if (!partial || 'modelId' in body) {
+    const modelId = String(body?.modelId || '').trim();
+    if (!modelId) return { error: '请填写模型 ID。' };
+    if (modelId.length > 200) return { error: '模型 ID 过长。' };
+    out.modelId = modelId;
+  }
+  if (!partial || 'modelType' in body) {
+    const modelType = String(body?.modelType || '').trim();
+    if (!MODEL_TYPES.includes(modelType)) return { error: '模型类型必须是文本模型或 OCR 模型。' };
+    out.modelType = modelType;
+  }
+  if (!partial || 'apiProtocol' in body) {
+    const apiProtocol = String(body?.apiProtocol || '').trim();
+    if (!API_PROTOCOLS.includes(apiProtocol)) return { error: '接口协议不正确。' };
+    out.apiProtocol = apiProtocol;
+  }
+  if ('displayName' in body) out.displayName = String(body.displayName || '').trim().slice(0, 120) || null;
+  if ('officialUrl' in body) out.officialUrl = String(body.officialUrl || '').trim().slice(0, 300) || null;
+  if ('apiBaseUrl' in body) out.apiBaseUrl = String(body.apiBaseUrl || '').trim().replace(/\/+$/, '') || null;
+  if ('inputPrice' in body) out.inputPrice = parseNullableNumber(body.inputPrice);
+  if ('outputPrice' in body) out.outputPrice = parseNullableNumber(body.outputPrice);
+  if ('contextWindow' in body) out.contextWindow = parseNullableInt(body.contextWindow);
+  if ('enabled' in body) out.enabled = Boolean(body.enabled);
+  if ('isDefault' in body) out.isDefault = Boolean(body.isDefault);
+  return out;
+}
 
 // ===== 认证 =====
 app.post('/api/admin/login', express.json(), async (req, res) => {
@@ -233,7 +348,7 @@ app.get('/api/admin/reports', requireAdmin, async (req, res) => {
     store.searchReports({ q, status, emailStatus, limit: pageSize, offset }),
     store.countSearchReports({ q, status, emailStatus }),
   ]);
-  res.json({ reports: rows, total, page, pageSize });
+  res.json({ reports: rows.map(r => ({ ...r, cost_usd: r.cost_usd == null ? null : Number(r.cost_usd) })), total, page, pageSize });
 });
 
 app.get('/api/admin/reports/:id', requireAdmin, async (req, res) => {
@@ -246,6 +361,8 @@ app.get('/api/admin/reports/:id', requireAdmin, async (req, res) => {
       jobTitle: report.job_title, reportName: report.report_name,
       status: report.status, emailStatus: report.email_status,
       createdAt: iso(report.created_at), updatedAt: iso(report.updated_at),
+      usage: report.usage || null,
+      costUsd: report.cost_usd == null ? null : Number(report.cost_usd),
       data: report.report,
     },
   });
@@ -358,6 +475,114 @@ app.delete('/api/admin/admins/:id', requireAdmin, async (req, res) => {
   if (admins.length <= 1) return res.status(400).json({ error: '至少保留一个管理员账号。' });
   await store.deleteAdmin(req.params.id);
   res.json({ ok: true, deleted: req.params.id });
+});
+
+// ===== AI 模型管理（人工维护为主，抓取价目仅作参考） =====
+app.get('/api/admin/ai-models', requireAdmin, async (req, res) => {
+  const models = await store.listAiModels();
+  res.json({
+    models,
+    defaultTextId: models.find(m => m.modelType === 'text' && m.isDefault)?.id || null,
+    defaultOcrId: models.find(m => m.modelType === 'ocr' && m.isDefault)?.id || null,
+  });
+});
+
+// 前端表单元数据：可选厂商、模型类型、接口协议、常见模型 ID 建议与默认 API 地址
+app.get('/api/admin/ai-models/meta', requireAdmin, async (req, res) => {
+  res.json({
+    providers: Object.entries(PROVIDER_LABELS)
+      .map(([key, label]) => ({ key, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN')),
+    modelTypes: Object.entries(MODEL_TYPE_LABELS).map(([value, label]) => ({ value, label })),
+    apiProtocols: Object.entries(API_PROTOCOL_LABELS).map(([value, label]) => ({ value, label })),
+    knownModels: PROVIDER_KNOWN_MODELS,
+    providerDefaults: PROVIDER_DEFAULTS,
+  });
+});
+
+app.post('/api/admin/ai-models', express.json(), requireAdmin, async (req, res) => {
+  const parsed = parseAiModelBody(req.body);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const result = await store.createAiModel({ id: crypto.randomUUID(), ...parsed });
+  if (result.conflict) return res.status(409).json({ error: '该厂商下已存在相同模型 ID，请勿重复添加。' });
+  if (result.model.isDefault) {
+    const r = await store.setDefaultAiModel(result.model.id, result.model.modelType);
+    if (r.error) await store.updateAiModel(result.model.id, { isDefault: false });
+  }
+  res.json({ ok: true, model: result.model });
+});
+
+app.put('/api/admin/ai-models/:id', express.json(), requireAdmin, async (req, res) => {
+  const existing = await store.getAiModelById(req.params.id);
+  if (!existing) return res.status(404).json({ error: '模型不存在。' });
+  const parsed = parseAiModelBody(req.body, true);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  if (parsed.modelType && parsed.modelType !== existing.modelType && existing.isDefault) {
+    await store.clearDefaultAiModel(existing.id);
+  }
+  const { isDefault, ...rest } = parsed;
+  const model = (await store.updateAiModel(existing.id, rest)) || existing;
+  if (isDefault === true) {
+    const r = await store.setDefaultAiModel(model.id, model.modelType);
+    if (r.error) return res.status(400).json({ error: r.error });
+  } else if (isDefault === false && existing.isDefault) {
+    await store.clearDefaultAiModel(model.id);
+  }
+  res.json({ ok: true, model: await store.getAiModelById(model.id) });
+});
+
+app.delete('/api/admin/ai-models/:id', requireAdmin, async (req, res) => {
+  const existing = await store.getAiModelById(req.params.id);
+  if (!existing) return res.status(404).json({ error: '模型不存在。' });
+  await store.deleteAiModel(existing.id);
+  res.json({ ok: true, deleted: existing.id });
+});
+
+app.post('/api/admin/ai-models/:id/default', requireAdmin, async (req, res) => {
+  const existing = await store.getAiModelById(req.params.id);
+  if (!existing) return res.status(404).json({ error: '模型不存在。' });
+  const result = await store.setDefaultAiModel(existing.id, existing.modelType);
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.json({ ok: true, model: await store.getAiModelById(existing.id) });
+});
+
+// 抓取第三方（OpenRouter）参考价目：仅返回参考数据，不写入正式配置
+app.post('/api/admin/ai-models/fetch', requireAdmin, async (req, res) => {
+  let response;
+  try {
+    response = await fetch('https://openrouter.ai/api/v1/models', { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20000) });
+  } catch (error) {
+    return res.status(502).json({ error: `参考价目抓取失败：${error.message}` });
+  }
+  if (!response.ok) return res.status(502).json({ error: `参考价目抓取失败：OpenRouter 返回 ${response.status}` });
+  const data = await response.json().catch(() => null);
+  const raw = Array.isArray(data?.data) ? data.data : [];
+  const models = raw
+    .map(m => {
+      const pricing = m.pricing || {};
+      const providerKey = String(m.id || '').split('/')[0];
+      if (!REFERENCE_PROVIDERS.has(providerKey)) return null;
+      const inputPrice = pricing.prompt == null ? null : Number(pricing.prompt) * 1e6;
+      const outputPrice = pricing.completion == null ? null : Number(pricing.completion) * 1e6;
+      return {
+        providerKey,
+        provider: PROVIDER_LABELS[providerKey] || providerKey,
+        id: String(m.id || ''),
+        name: m.name || m.id,
+        contextLength: m.context_length == null ? null : Number(m.context_length),
+        inputPrice: inputPrice == null || !Number.isFinite(inputPrice) ? null : Math.round(inputPrice * 10000) / 10000,
+        outputPrice: outputPrice == null || !Number.isFinite(outputPrice) ? null : Math.round(outputPrice * 10000) / 10000,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.provider.localeCompare(b.provider, 'zh-CN') || a.id.localeCompare(b.id));
+  res.json({
+    fetchedAt: new Date().toISOString(),
+    source: 'OpenRouter 第三方代理参考价（非官方账单价），仅供填写参考，不会写入正式配置',
+    total: models.length,
+    providers: [...new Set(models.map(m => m.provider))],
+    models,
+  });
 });
 
 // ===== 404 处理 =====

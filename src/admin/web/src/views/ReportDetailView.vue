@@ -47,6 +47,30 @@
             <dt>更新时间</dt>
             <dd>{{ formatDateTime(report.updatedAt) }}</dd>
           </div>
+          <div class="meta-item">
+            <dt>AI 模型</dt>
+            <dd>{{ report.usage?.model || '—' }}</dd>
+          </div>
+          <div class="meta-item">
+            <dt>Token 用量</dt>
+            <dd class="cell-num">
+              <template v-if="report.usage?.totalTokens">
+                {{ report.usage.totalTokens.toLocaleString() }} <span class="meta-unit">tokens</span>
+                <span v-if="report.usage.inputTokens != null || report.usage.outputTokens != null" class="meta-hint">输入 {{ (report.usage.inputTokens || 0).toLocaleString() }} · 输出 {{ (report.usage.outputTokens || 0).toLocaleString() }}</span>
+              </template>
+              <template v-else>—</template>
+            </dd>
+          </div>
+          <div class="meta-item">
+            <dt>估算费用</dt>
+            <dd class="cell-num">
+              <template v-if="report.costUsd != null">
+                {{ formatCost(report.costUsd) }}
+                <span class="meta-hint">按模型公开价目估算</span>
+              </template>
+              <template v-else>—</template>
+            </dd>
+          </div>
         </dl>
       </section>
 
@@ -199,6 +223,14 @@ function formatDateTime(value) {
   return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
 }
 
+function formatCost(value) {
+  if (value == null) return '—'
+  const n = Number(value)
+  if (n === 0) return '$0.00'
+  if (n < 0.01) return '<$0.01'
+  return `$${n.toFixed(4)}`
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -285,6 +317,17 @@ onMounted(load)
   font-size: 13px;
   color: var(--color-text-secondary);
   overflow-wrap: anywhere;
+}
+.meta-unit {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+.meta-hint {
+  display: block;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-top: 2px;
 }
 @media (max-width: 980px) {
   .meta-grid { grid-template-columns: repeat(2, 1fr); }

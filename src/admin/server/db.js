@@ -43,6 +43,24 @@ ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_vision_model text;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS resend_api_key text;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS email_from text;
 -- 自愈：历史编码问题可能导致默认站点名被写成问号/空，启动时自动重置为默认值（不覆盖用户后期修改）
+CREATE TABLE IF NOT EXISTS ai_models (
+  id uuid PRIMARY KEY,
+  provider text NOT NULL,
+  model_id text NOT NULL,
+  display_name text,
+  model_type text NOT NULL DEFAULT 'text',
+  official_url text,
+  api_base_url text,
+  api_protocol text NOT NULL DEFAULT 'chat_completions',
+  input_price numeric,
+  output_price numeric,
+  context_window integer,
+  enabled boolean NOT NULL DEFAULT true,
+  is_default boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  UNIQUE (provider, model_id)
+);
 UPDATE admin_settings
 SET site_name = '岗位镜管理后台', announcement = '', updated_at = now()
 WHERE id = 1 AND (site_name IS NULL OR site_name = '' OR site_name ~ '^[?]+$');
@@ -57,6 +75,24 @@ function selectedUrl() {
 const cnDate = `(created_at AT TIME ZONE 'Asia/Shanghai')::date`;
 const reportTable = 'app_reports';
 const userTable = 'app_users';
+
+const mapAiModel = row => row && ({
+  id: row.id,
+  provider: row.provider,
+  modelId: row.model_id,
+  displayName: row.display_name,
+  modelType: row.model_type,
+  officialUrl: row.official_url,
+  apiBaseUrl: row.api_base_url,
+  apiProtocol: row.api_protocol,
+  inputPrice: row.input_price == null ? null : Number(row.input_price),
+  outputPrice: row.output_price == null ? null : Number(row.output_price),
+  contextWindow: row.context_window == null ? null : Number(row.context_window),
+  enabled: Boolean(row.enabled),
+  isDefault: Boolean(row.is_default),
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
 
 export function createPgStore() {
   const connectionString = selectedUrl();
@@ -129,6 +165,75 @@ export function createPgStore() {
       if ('emailFrom' in patch) push('email_from', patch.emailFrom || null);
       if (!fields.length) return;
       await pool.query('UPDATE admin_settings SET ' + fields.join(', ') + ', updated_at = now() WHERE id = 1', values);
+    },
+
+    // ===== AI 模型（人工维护；抓取价目仅作参考，不写入此表） =====
+    async listAiModels() {
+      const { rows } = await pool.query('SELECT * FROM ai_models ORDER BY model_type, is_default DESC, provider, model_id');
+      return rows.map(mapAiModel);
+    },
+    async getAiModelById(id) {
+      const { rows } = await pool.query('SELECT * FROM ai_models WHERE id = $1', [id]);
+      return mapAiModel(rows[0] || null);
+    },
+    async findAiModelByModelId(modelId) {
+      const { rows } = await pool.query('SELECT * FROM ai_models WHERE LOWER(model_id) = LOWER($1) ORDER BY is_default DESC LIMIT 1', [String(modelId || '')]);
+      return mapAiModel(rows[0] || null);
+    },
+    async getDefaultAiModel(modelType = 'text') {
+      const { rows } = await pool.query('SELECT * FROM ai_models WHERE model_type = $1 AND is_default = true AND enabled = true LIMIT 1', [modelType]);
+      return mapAiModel(rows[0] || null);
+    },
+    async createAiModel(input) {
+      const existing = await pool.query('SELECT 1 FROM ai_models WHERE provider = $1 AND model_id = $2', [input.provider, input.modelId]);
+      if (existing.rows.length) return { conflict: true };
+      const { rows } = await pool.query(
+        `INSERT INTO ai_models (id, provider, model_id, display_name, model_type, official_url, api_base_url, api_protocol, input_price, output_price, context_window, enabled, is_default, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now(),now()) RETURNING *`,
+        [input.id, input.provider, input.modelId, input.displayName || null, input.modelType, input.officialUrl || null, input.apiBaseUrl || null, input.apiProtocol, input.inputPrice, input.outputPrice, input.contextWindow, Boolean(input.enabled !== false), Boolean(input.isDefault)]
+      );
+      return { conflict: false, model: mapAiModel(rows[0]) };
+    },
+    async updateAiModel(id, input) {
+      const fields = [];
+      const values = [];
+      const push = (col, val) => { fields.push(col + ' = $' + (fields.length + 1)); values.push(val); };
+      if ('provider' in input) push('provider', input.provider);
+      if ('modelId' in input) push('model_id', input.modelId);
+      if ('displayName' in input) push('display_name', input.displayName || null);
+      if ('modelType' in input) push('model_type', input.modelType);
+      if ('officialUrl' in input) push('official_url', input.officialUrl || null);
+      if ('apiBaseUrl' in input) push('api_base_url', input.apiBaseUrl || null);
+      if ('apiProtocol' in input) push('api_protocol', input.apiProtocol);
+      if ('inputPrice' in input) push('input_price', input.inputPrice);
+      if ('outputPrice' in input) push('output_price', input.outputPrice);
+      if ('contextWindow' in input) push('context_window', input.contextWindow);
+      if ('enabled' in input) push('enabled', Boolean(input.enabled));
+      if ('isDefault' in input) push('is_default', Boolean(input.isDefault));
+      if (!fields.length) return null;
+      values.push(id);
+      const { rows } = await pool.query('UPDATE ai_models SET ' + fields.join(', ') + ', updated_at = now() WHERE id = $' + (fields.length + 1) + ' RETURNING *', values);
+      return mapAiModel(rows[0] || null);
+    },
+    async deleteAiModel(id) {
+      await pool.query('DELETE FROM ai_models WHERE id = $1', [id]);
+    },
+    async setDefaultAiModel(id, modelType) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query('SELECT * FROM ai_models WHERE id = $1', [id]);
+        if (!rows.length) { await client.query('ROLLBACK'); return { error: '模型不存在。' }; }
+        if (rows[0].model_type !== modelType) { await client.query('ROLLBACK'); return { error: '模型类型不匹配。' }; }
+        if (!rows[0].enabled) { await client.query('ROLLBACK'); return { error: '请先启用该模型，再设为主模型。' }; }
+        await client.query('UPDATE ai_models SET is_default = false, updated_at = now() WHERE model_type = $1', [modelType]);
+        await client.query('UPDATE ai_models SET is_default = true, updated_at = now() WHERE id = $1', [id]);
+        await client.query('COMMIT');
+        return { ok: true };
+      } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+    },
+    async clearDefaultAiModel(id) {
+      await pool.query('UPDATE ai_models SET is_default = false, updated_at = now() WHERE id = $1', [id]);
     },
 
     // ===== 统计 =====
@@ -254,7 +359,7 @@ export function createPgStore() {
       }
       const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
       const { rows } = await pool.query(
-        `SELECT id, access_token, company_short_name, job_title, report_name, status, email_status, email, created_at
+        `SELECT id, access_token, company_short_name, job_title, report_name, status, email_status, email, usage, cost_usd, created_at
          FROM ${reportTable} ${where} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`,
         params
       );

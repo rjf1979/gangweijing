@@ -41,16 +41,17 @@
               <th>生成时间</th>
               <th>状态</th>
               <th>邮件</th>
+              <th>Tokens / 费用</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody v-if="loading">
             <tr v-for="i in 8" :key="i">
-              <td colspan="8"><div class="skeleton row-skeleton"></div></td>
+              <td colspan="9"><div class="skeleton row-skeleton"></div></td>
             </tr>
           </tbody>
           <tbody v-else-if="error">
-            <tr><td colspan="8" class="cell-muted" role="alert">{{ error }}</td></tr>
+            <tr><td colspan="9" class="cell-muted" role="alert">{{ error }}</td></tr>
           </tbody>
           <tbody v-else-if="reports.length">
             <tr v-for="report in reports" :key="report.id" class="row-link" @click="$router.push(`/reports/${report.id}`)">
@@ -63,6 +64,13 @@
               <td class="cell-secondary cell-num">{{ formatDateTime(report.created_at) }}</td>
               <td><StatusBadge :value="report.status" /></td>
               <td><StatusBadge :value="report.email_status" /></td>
+              <td class="cell-secondary cell-num cell-cost">
+                <template v-if="report.usage?.totalTokens">
+                  <div>{{ report.usage.totalTokens.toLocaleString() }} <span class="cost-token-label">tokens</span></div>
+                  <div class="cell-cost-amount">{{ formatCost(report.cost_usd) }}</div>
+                </template>
+                <span v-else>—</span>
+              </td>
               <td class="cell-actions">
                 <button class="btn btn-danger btn-sm" type="button" @click.stop="askDelete(report)">
                   <AppIcon name="trash" :size="13" /> 删除
@@ -71,7 +79,7 @@
             </tr>
           </tbody>
           <tbody v-else>
-            <tr><td colspan="8"><div class="empty-state"><strong>没有匹配的报告</strong>调整筛选条件试试</div></td></tr>
+            <tr><td colspan="9"><div class="empty-state"><strong>没有匹配的报告</strong>调整筛选条件试试</div></td></tr>
           </tbody>
         </table>
       </div>
@@ -142,6 +150,14 @@ const hasFilters = computed(() => Boolean(keyword.value || statusFilter.value ||
 function formatDateTime(value) {
   if (!value) return '—'
   return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
+}
+
+function formatCost(value) {
+  if (value == null) return '—'
+  const n = Number(value)
+  if (n === 0) return '$0.00'
+  if (n < 0.01) return '<$0.01'
+  return `$${n.toFixed(4)}`
 }
 
 async function load() {
@@ -251,6 +267,18 @@ onMounted(load)
 .cell-mono {
   font-family: var(--font-mono);
   font-size: 12.5px;
+}
+.cell-cost {
+  white-space: nowrap;
+}
+.cost-token-label {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+.cell-cost-amount {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  margin-top: 2px;
 }
 @media (max-width: 1100px) {
   .toolbar { flex-direction: column; align-items: stretch; }
