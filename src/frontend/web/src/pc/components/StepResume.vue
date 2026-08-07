@@ -57,6 +57,7 @@ function fail(message) {
 async function submit() {
   error.value = ''
   let value = text.value.trim()
+  let fileRef = ''
   if (file.value) {
     submitting.value = true
     uploading.value = true
@@ -72,6 +73,7 @@ async function submit() {
         }
       })
       value = data.text || ''
+      fileRef = data.fileRef || ''
       text.value = value
     } catch (err) {
       return fail(err.message)
@@ -82,7 +84,7 @@ async function submit() {
   }
   if (!value) return fail('请上传简历或粘贴简历文本。')
   try {
-    await api.put('/api/resume', { text: value })
+    await api.put('/api/resume', { text: value, fileRef })
   } catch (err) {
     return fail(err.message)
   }

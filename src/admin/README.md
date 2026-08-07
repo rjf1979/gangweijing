@@ -1,4 +1,4 @@
-# 岗位镜管理后台
+﻿# 岗位镜管理后台
 
 独立管理后台项目，用于运营岗位镜（candidate-fit-tool）的业务数据：用户、分析报告、站点设置与管理员账号。
 
@@ -43,7 +43,7 @@ npm run build          # 构建产物输出到 src/admin/web/dist
 ## 功能模块
 
 - 统计概览：用户/报告总量与今日、本周增量，近 14 天趋势，最新动态
-- 用户管理：搜索、查看详情（简历与报告）、删除用户
+- 用户管理：搜索、查看详情（简历与报告）、原始简历文件维护（预览 / 下载 / 删除）、删除用户（级联清理其简历文件目录）
 - 报告管理：搜索与状态筛选、查看报告内容、删除报告
 - 系统设置：站点基础设置、管理员账号管理、改密码、环境服务状态查看
 
@@ -56,4 +56,5 @@ npm run build          # 构建产物输出到 src/admin/web/dist
 | `DATABASE_URL_LOCAL` / `DATABASE_URL_SERVER` / `DATABASE_URL` | 数据库连接串 |
 | `APP_URL_MODE` | 数据库选择模式：local / server |
 | `ADMIN_INIT_EMAIL` / `ADMIN_INIT_PASSWORD` | 初始管理员账号（仅空表时创建） |
+| `FRONTEND_DATA_DIR` | 用户端简历原文件目录（相对 src/admin/server 解析，默认 `../../frontend/server/.runtime`；部署时用户端 .runtime 不在默认位置才需要设置） |
 | `OPENAI_*` / `RESEND_*` / `EMAIL_FROM` | 仅用于只读展示服务配置状态，不存储密钥 |

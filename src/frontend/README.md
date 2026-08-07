@@ -1,4 +1,4 @@
-# 岗位镜用户端
+﻿# 岗位镜用户端
 
 岗位镜（candidate-fit-tool）的用户端应用，面向求职者：上传简历 → 确认事实 → 上传岗位图分析 → 生成/分享报告。
 
@@ -56,7 +56,7 @@ npm run build:pc          # 构建 PC → dist/build/pc
 ## 功能模块
 
 - 用户：注册 / 登录（邮箱验证）、会话管理（H5 Cookie；小程序/App 手动 Token）
-- 简历：上传解析（docx / pdf）、文本编辑保存
+- 简历：上传解析（docx / pdf）、文本编辑保存、原始文件保留归档（存储于 server/.runtime/resume-files/<用户ID>/，磁盘用 UUID 命名，原名存库，供管理后台预览/下载）
 - 岗位：上传招聘截图，AI 识别岗位信息（公司 / 岗位 / 职责 / 要求）
 - 报告：AI 生成简历 × 岗位分维度分析报告，生成分享链接，邮件通知
 - PC 分流：移动端访问 H5，宽屏访问 PC 版；旧 URL 兼容重定向（/report/:token、/verify-email/:token、/my-resume 等）

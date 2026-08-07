@@ -75,4 +75,39 @@ export const api = {
       store.sessionChecked = true
     }
   },
+
+  // 打开/下载用户原始简历文件（预览用 blob 新窗口，下载用 a[download]）
+  async openResumeFile(userId, { download = false, filename = 'resume' } = {}) {
+    const headers = {}
+    if (store.token) headers.Authorization = `Bearer ${store.token}`
+    let response
+    try {
+      response = await fetch(`${API_BASE}/users/${userId}/resume-file${download ? '?download=1' : ''}`, { headers })
+    } catch (error) {
+      throw new ApiError('网络连接失败，请检查服务是否可用。', 0)
+    }
+    if (response.status === 401) {
+      clearSession()
+      if (window.location.pathname !== '/login') window.location.assign('/login')
+      throw new ApiError('登录已过期，请重新登录。', 401)
+    }
+    if (!response.ok) {
+      let data = null
+      try { data = await response.json() } catch {}
+      throw new ApiError(data?.error || `请求失败（${response.status}）`, response.status)
+    }
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    if (download) {
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename || 'resume'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } else {
+      window.open(url, '_blank')
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 120000)
+  },
 }

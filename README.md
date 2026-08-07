@@ -1,4 +1,4 @@
-# 岗位镜（gangweijing）
+﻿# 岗位镜（gangweijing）
 
 AI 求职材料审阅工具：上传简历 → 确认事实 → 上传岗位图分析 → 生成/分享报告。
 
@@ -22,6 +22,7 @@ node --env-file=.env server.js   # 默认端口 3215（PORT 可覆盖）
 ```
 
 - API 前缀 `/api/*`；生产域名 https://gwj.zhicha.io（发布由用户决定）。
+- 简历原文件：用户上传的 PDF/DOCX 解析后保留原始文件，归档于 `server/.runtime/resume-files/<用户ID>/`（磁盘 UUID 命名、原名存库），供管理后台预览/下载/删除；上传 1 小时、暂存超 24 小时未保存的文件自动清理。
 - server.js 同时托管 H5 与 PC 构建产物（构建后拷至 src/frontend/server/public/h5、public/pc，按 UA 分流），并兼容旧 URL 重定向（/report/:token、/verify-email/:token、/my-resume 等）。
 
 ## 用户端前端（src/frontend/web/）
@@ -50,7 +51,7 @@ cd src/admin/web    && npm install && npm run dev                           # �
 ```
 
 - 管理员体系独立（admin_users / admin_sessions / admin_settings），业务数据直查 app_* 表。
-- 功能：统计概览、用户管理、报告管理、系统设置（站点设置 / 管理员 / 改密码 / 环境状态）。
+- 功能：统计概览、用户管理（含原始简历文件预览/下载/删除）、报告管理、系统设置（站点设置 / 管理员 / 改密码 / 环境状态）。
 - 部署：构建 `src/admin/web` 后将 dist 拷至 `src/admin/server/dist`，由后端统一托管。
 - 详见 `src/admin/README.md`。
 

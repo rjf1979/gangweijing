@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+﻿import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
@@ -9,6 +9,32 @@ const root = path.resolve('.');
 const webDist = path.join(root, 'dist');
 const store = createPgStore();
 await store.init();
+
+// 用户端上传的简历原文件目录（用户端默认在 src/frontend/server/.runtime 下，可用 FRONTEND_DATA_DIR 覆盖）
+const frontendDataDir = path.resolve(process.env.FRONTEND_DATA_DIR || '../../frontend/server/.runtime');
+// 数据库中的相对路径白名单：仅允许 resume-files/ 下的相对路径，防止路径穿越
+const safeRelPath = value => {
+  if (typeof value !== 'string' || !value) return null;
+  const normalized = value.replace(/\\/g, '/');
+  if (normalized.includes('..') || path.posix.isAbsolute(normalized) || !normalized.startsWith('resume-files/')) return null;
+  return normalized;
+};
+const publicResumeFile = user => {
+  if (!user?.resume_file_path || !safeRelPath(user.resume_file_path)) return null;
+  return {
+    name: user.resume_file_name || '简历文件',
+    mime: user.resume_file_mime || 'application/octet-stream',
+    size: Number(user.resume_file_size) || 0,
+    uploadedAt: iso(user.resume_file_uploaded_at),
+  };
+};
+async function removeUserResumeDir(user) {
+  const relPath = safeRelPath(user?.resume_file_path);
+  if (!relPath) return;
+  const dir = path.posix.dirname(relPath);
+  if (!dir || dir === '.') return;
+  await fs.promises.rm(path.join(frontendDataDir, dir), { recursive: true, force: true }).catch(() => {});
+}
 
 // ===== 基础工具 =====
 const hashPassword = password => {
@@ -140,6 +166,7 @@ app.get('/api/admin/users/:id', requireAdmin, async (req, res) => {
       id: user.id, email: user.email, emailVerifiedAt: iso(user.email_verified_at),
       createdAt: iso(user.created_at), resumeText: user.resume_text || '',
       resumeUpdatedAt: iso(user.resume_updated_at),
+      resumeFile: publicResumeFile(user),
       verificationEmailStatus: user.verification_email_status || 'none',
     },
     reports: reports.map(r => ({
@@ -153,8 +180,41 @@ app.get('/api/admin/users/:id', requireAdmin, async (req, res) => {
 app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
   const user = await store.getUserById(req.params.id);
   if (!user) return res.status(404).json({ error: '用户不存在。' });
+  await removeUserResumeDir(user);
   await store.deleteUser(user.id);
   res.json({ ok: true, deleted: user.id });
+});
+
+// ===== 用户原始简历文件管理 =====
+app.get('/api/admin/users/:id/resume-file', requireAdmin, async (req, res) => {
+  const user = await store.getUserById(req.params.id);
+  if (!user) return res.status(404).json({ error: '用户不存在。' });
+  const relPath = safeRelPath(user.resume_file_path);
+  if (!relPath) return res.status(404).json({ error: '该用户没有原始简历文件。' });
+  const filePath = path.join(frontendDataDir, relPath);
+  let stat;
+  try { stat = await fs.promises.stat(filePath); } catch { return res.status(404).json({ error: '原始简历文件不存在或已被清理。' }); }
+  if (!stat.isFile()) return res.status(404).json({ error: '原始简历文件不存在或已被清理。' });
+  const name = user.resume_file_name || 'resume';
+  const encoded = encodeURIComponent(name).replace(/'/g, '%27');
+  const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+  res.setHeader('Content-Type', user.resume_file_mime || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `${disposition}; filename="resume"; filename*=UTF-8''${encoded}`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.sendFile(filePath, { dotfiles: 'allow' });
+});
+
+app.delete('/api/admin/users/:id/resume-file', requireAdmin, async (req, res) => {
+  const user = await store.getUserById(req.params.id);
+  if (!user) return res.status(404).json({ error: '用户不存在。' });
+  const relPath = safeRelPath(user.resume_file_path);
+  if (!relPath) return res.status(404).json({ error: '该用户没有原始简历文件。' });
+  const filePath = path.join(frontendDataDir, relPath);
+  await fs.promises.rm(filePath, { force: true }).catch(() => {});
+  await fs.promises.rmdir(path.dirname(filePath)).catch(() => {});
+  await store.clearResumeFile(user.id);
+  res.json({ ok: true });
 });
 
 // ===== 报告管理 =====

@@ -51,6 +51,36 @@
 
       <section class="card">
         <div class="card-head">
+          <h2 class="card-title">原始简历文件</h2>
+          <span v-if="user.resumeFile" class="badge badge-success">已保留</span>
+          <span v-else class="badge badge-neutral">无</span>
+        </div>
+        <div v-if="user.resumeFile" class="resume-file">
+          <div class="resume-file-meta">
+            <div class="resume-file-name">{{ user.resumeFile.name }}</div>
+            <div class="resume-file-info">
+              <span>{{ formatBytes(user.resumeFile.size) }}</span>
+              <span>{{ user.resumeFile.mime }}</span>
+              <span>上传于 {{ formatDateTime(user.resumeFile.uploadedAt) }}</span>
+            </div>
+          </div>
+          <div class="resume-file-actions">
+            <button class="btn btn-sm" type="button" :disabled="fileBusy" @click="previewResumeFile">
+              <AppIcon name="eye" :size="13" /> 预览
+            </button>
+            <button class="btn btn-sm" type="button" :disabled="fileBusy" @click="downloadResumeFile">
+              <AppIcon name="external" :size="13" /> 下载
+            </button>
+            <button class="btn btn-danger btn-sm" type="button" :disabled="fileBusy" @click="askDeleteResumeFile">
+              <AppIcon name="trash" :size="13" /> 删除
+            </button>
+          </div>
+        </div>
+        <div v-else class="empty-state"><strong>暂无原始文件</strong>该用户尚未上传原始简历文件（可能仅保存了简历文本）</div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
           <h2 class="card-title">简历内容</h2>
           <span v-if="user.resumeText" class="badge badge-success">已上传</span>
         </div>
@@ -117,6 +147,15 @@
       @close="deleteReportTarget = null"
       @confirm="confirmDeleteReport"
     />
+    <ConfirmDialog
+      :open="deleteResumeFileOpen"
+      title="删除原始简历文件"
+      :message="user && user.resumeFile ? `将永久删除用户「${user.email}」上传的原始简历文件「${user.resumeFile.name}」。\n已提取的简历文本会保留，此操作不可撤销。` : ''"
+      confirm-text="确认删除"
+      :busy="busy"
+      @close="deleteResumeFileOpen = false"
+      @confirm="confirmDeleteResumeFile"
+    />
   </div>
 </template>
 
@@ -139,6 +178,8 @@ const user = ref(null)
 const reports = ref([])
 const deleteUserOpen = ref(false)
 const deleteReportTarget = ref(null)
+const deleteResumeFileOpen = ref(false)
+const fileBusy = ref(false)
 const busy = ref(false)
 
 const charAt0 = computed(() => String(user.value?.email || '?').charAt(0))
@@ -154,6 +195,12 @@ function formatDate(value) {
 function formatDateTime(value) {
   if (!value) return '—'
   return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
+}
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '—'
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB'
 }
 
 async function load() {
@@ -203,6 +250,45 @@ async function confirmDeleteReport() {
     deleteReportTarget.value = null
   } finally {
     busy.value = false
+  }
+}
+function askDeleteResumeFile() {
+  deleteResumeFileOpen.value = true
+}
+async function confirmDeleteResumeFile() {
+  busy.value = true
+  try {
+    await api.delete(`/users/${userId.value}/resume-file`)
+    user.value.resumeFile = null
+    toast('原始简历文件已删除', 'success')
+    deleteResumeFileOpen.value = false
+  } catch (err) {
+    toast(err.message || '删除失败', 'error')
+    deleteResumeFileOpen.value = false
+  } finally {
+    busy.value = false
+  }
+}
+async function previewResumeFile() {
+  if (!user.value?.resumeFile) return
+  fileBusy.value = true
+  try {
+    await api.openResumeFile(userId.value, { download: false })
+  } catch (err) {
+    toast(err.message || '打开失败', 'error')
+  } finally {
+    fileBusy.value = false
+  }
+}
+async function downloadResumeFile() {
+  if (!user.value?.resumeFile) return
+  fileBusy.value = true
+  try {
+    await api.openResumeFile(userId.value, { download: true, filename: user.value.resumeFile.name })
+  } catch (err) {
+    toast(err.message || '下载失败', 'error')
+  } finally {
+    fileBusy.value = false
   }
 }
 
@@ -297,5 +383,35 @@ onMounted(load)
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.resume-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.resume-file-meta {
+  min-width: 0;
+  flex: 1;
+}
+.resume-file-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+  margin-bottom: 6px;
+}
+.resume-file-info {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.resume-file-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
 </style>

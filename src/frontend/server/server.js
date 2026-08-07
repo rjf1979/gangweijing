@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+﻿import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
@@ -11,8 +11,12 @@ const app = express();
 const root = path.resolve('.');
 const dataDir = path.join(root, '.runtime');
 const uploadDir = path.join(dataDir, 'uploads');
+const resumeFilesDir = path.join(dataDir, 'resume-files');
+const resumeStagingDir = path.join(resumeFilesDir, '.staging');
 const dbPath = path.join(dataDir, 'db.json');
 await fs.mkdir(uploadDir, { recursive: true });
+await fs.mkdir(resumeFilesDir, { recursive: true });
+await fs.mkdir(resumeStagingDir, { recursive: true });
 try { await fs.access(dbPath); } catch { await fs.writeFile(dbPath, JSON.stringify({ users: [], reports: [] })); }
 const dbStore = createPgStore();
 await dbStore.init();
@@ -23,6 +27,13 @@ function currentSession(req, db) { const cookie = (req.headers.cookie || '').spl
 function currentUser(req, db) { const session = currentSession(req, db); return session && db.users.find(user => user.id === session.userId); }
 const hash = value => crypto.scryptSync(value, 'job-mirror', 64).toString('hex');
 const upload = multer({ dest: uploadDir, limits: { fileSize: 10 * 1024 * 1024 } });
+// multer/busboy 默认按 latin1 解码 multipart 文件名，中文文件名会变乱码，这里尝试还原为 UTF-8
+const normalizeResumeFileName = name => {
+  if (typeof name !== 'string' || !name) return name || '';
+  const decoded = Buffer.from(name, 'latin1').toString('utf8');
+  if (decoded !== name && !decoded.includes('\uFFFD') && /[\u4e00-\u9fff]/.test(decoded)) return decoded;
+  return name;
+};
 const aiBaseUrl = () => (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 const outputText = payload => payload.output_text || payload.output?.flatMap(item => item.content || []).find(item => item.type === 'output_text')?.text || '';
 async function callResponses(body) { const response = await fetch(`${aiBaseUrl()}/responses`, { method: 'POST', headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(`GPT 接口返回 ${response.status}`); return response.json(); }
@@ -91,15 +102,68 @@ app.post('/api/login', async (req, res) => { const { email, password } = req.bod
 app.get('/api/session', async (req, res) => { const db = await readDb(); const session = currentSession(req, db); const user = session && db.users.find(x => x.id === session.userId); res.json({ authenticated: Boolean(user), user: user ? { id: user.id, email: user.email, emailVerified: Boolean(user.emailVerifiedAt) } : null }); });
 app.post('/api/verification-email', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); if (user.emailVerifiedAt) return res.json({ verified: true }); const elapsed = Date.now() - new Date(user.verificationSentAt || 0).getTime(); if (elapsed < 60000) return res.status(429).json({ error: `请在 ${Math.ceil((60000 - elapsed) / 1000)} 秒后重试。` }); const token = issueVerification(user); await saveDb(db); try { user.verificationMessageId = await sendVerificationEmail(user.email, token); user.verificationEmailStatus = 'sent'; delete user.verificationEmailError; await saveDb(db); res.json({ sent: true }); } catch (error) { user.verificationEmailStatus = 'failed'; user.verificationEmailError = error.message; await saveDb(db); res.status(502).json({ error: `验证邮件发送失败：${error.message}` }); } });
 app.post('/api/verify-email', async (req, res) => { const token = String(req.body?.token || ''); if (!token) return res.status(400).json({ error: '验证链接无效。' }); const db = await readDb(); const tokenHash = verificationHash(token); const user = db.users.find(item => item.emailVerificationTokenHash === tokenHash); if (!user || !user.emailVerificationExpiresAt || new Date(user.emailVerificationExpiresAt) <= new Date()) return res.status(400).json({ error: '验证链接无效或已过期，请重新发送。' }); user.emailVerifiedAt = new Date().toISOString(); delete user.emailVerificationTokenHash; delete user.emailVerificationExpiresAt; delete user.verificationEmailError; user.verificationEmailStatus = 'verified'; await saveDb(db); res.json({ verified: true, email: user.email }); });
-app.get('/api/resume', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); res.json({ hasResume: Boolean(user.resumeText), text: user.resumeText || '', updatedAt: user.resumeUpdatedAt || user.createdAt }); });
-app.put('/api/resume', async (req, res) => { const text = String(req.body?.text || '').trim(); if (!text) return res.status(400).json({ error: '简历内容不能为空。' }); const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); user.resumeText = text; user.resumeUpdatedAt = new Date().toISOString(); await saveDb(db); res.json({ saved: true }); });
+app.get('/api/resume', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); res.json({ hasResume: Boolean(user.resumeText), text: user.resumeText || '', updatedAt: user.resumeUpdatedAt || user.createdAt, resumeFile: user.resumeFilePath ? { name: user.resumeFileName || '简历文件', mime: user.resumeFileMime || 'application/octet-stream', size: user.resumeFileSize || 0, uploadedAt: user.resumeFileUploadedAt || null } : null }); });
+const FILE_REF_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isSafeFileRef = value => typeof value === 'string' && FILE_REF_RE.test(value);
+async function readStagingMeta(fileRef) {
+  try {
+    const meta = JSON.parse(await fs.readFile(path.join(resumeStagingDir, fileRef + '.meta.json'), 'utf8'));
+    return { name: String(meta.name || 'resume').slice(0, 255), mime: String(meta.mime || 'application/octet-stream').slice(0, 200), size: Number(meta.size) || 0 };
+  } catch { return null; }
+}
+app.put('/api/resume', async (req, res) => {
+  const text = String(req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: '简历内容不能为空。' });
+  const fileRef = String(req.body?.fileRef || '');
+  const db = await readDb();
+  const user = currentUser(req, db);
+  if (!user) return res.status(401).json({ error: '请先登录。' });
+  user.resumeText = text;
+  user.resumeUpdatedAt = new Date().toISOString();
+  if (fileRef) {
+    if (!isSafeFileRef(fileRef)) return res.status(400).json({ error: '简历文件标识无效，请重新上传。' });
+    const stagingPath = path.join(resumeStagingDir, fileRef);
+    let stat;
+    try { stat = await fs.stat(stagingPath); } catch { return res.status(400).json({ error: '简历文件已失效，请重新上传。' }); }
+    if (!stat.isFile()) return res.status(400).json({ error: '简历文件已失效，请重新上传。' });
+    const meta = await readStagingMeta(fileRef);
+    const userDir = path.join(resumeFilesDir, user.id);
+    await fs.mkdir(userDir, { recursive: true });
+    const target = path.join(userDir, fileRef);
+    const oldPath = user.resumeFilePath ? path.join(dataDir, user.resumeFilePath) : null;
+    await fs.rename(stagingPath, target).catch(async () => { await fs.copyFile(stagingPath, target); await fs.unlink(stagingPath).catch(() => {}); });
+    await fs.unlink(path.join(resumeStagingDir, fileRef + '.meta.json')).catch(() => {});
+    user.resumeFileName = meta?.name || 'resume.pdf';
+    user.resumeFileMime = meta?.mime || 'application/octet-stream';
+    user.resumeFileSize = meta?.size || stat.size || 0;
+    user.resumeFilePath = 'resume-files/' + user.id + '/' + fileRef;
+    user.resumeFileUploadedAt = new Date().toISOString();
+    if (oldPath && oldPath !== target) await fs.rm(oldPath, { force: true }).catch(() => {});
+  }
+  await saveDb(db);
+  res.json({ saved: true, hasResumeFile: Boolean(user.resumeFilePath) });
+});
 async function extractResume(file) {
   if (file.mimetype === 'application/pdf') { const parser = new PDFParse({ data: await fs.readFile(file.path) }); const result = await parser.getText(); await parser.destroy(); return result.text; }
   if (file.mimetype.includes('wordprocessingml')) return (await mammoth.extractRawText({ path: file.path })).value;
   throw new Error('仅支持 PDF 或 DOCX 简历。');
 }
-app.post('/api/extract/resume', upload.single('resume'), async (req, res) => { try { res.json({ text: await extractResume(req.file) }); } catch (error) { res.status(400).json({ error: error.message }); } });
-app.post('/api/extract/screenshot', upload.single('screenshot'), async (req, res) => { try { if (!req.file?.mimetype.startsWith('image/')) return res.status(400).json({ error: '请上传有效的岗位截图。' }); if (!process.env.OPENAI_API_KEY) return res.status(503).json({ error: '尚未配置 AI 接口。' }); const image = `data:${req.file.mimetype};base64,${(await fs.readFile(req.file.path)).toString('base64')}`; const prompt = '识别这张招聘岗位截图。完整保留职责、要求、薪资、地点、公司和岗位名称，不要补充图片中不存在的信息。输出严格 JSON：{"company_short_name":"","job_title":"","text":"","warnings":[]}。公司简称应去掉有限公司等工商后缀；无法确认的内容留空并放入 warnings。'; const payload = await callResponses({ model: process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: image }] }], text: { format: { type: 'json_object' } } }); const result = JSON.parse(outputText(payload) || '{}'); res.json({ text: result.text || '', companyShortName: result.company_short_name || '', jobTitle: result.job_title || '', warnings: result.warnings || [] }); } catch (error) { res.status(502).json({ error: `AI 截图识别失败：${error.message}` }); } });
+app.post('/api/extract/resume', upload.single('resume'), async (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: '请选择要上传的简历文件。' });
+  try {
+    const text = await extractResume(file);
+    const fileRef = crypto.randomUUID();
+    // 保留原始文件到暂存区，等保存简历时归档到用户目录（原始文件名仅存库，磁盘用 UUID 命名）
+    await fs.rename(file.path, path.join(resumeStagingDir, fileRef)).catch(async () => { await fs.copyFile(file.path, path.join(resumeStagingDir, fileRef)); await fs.unlink(file.path).catch(() => {}); });
+    await fs.writeFile(path.join(resumeStagingDir, fileRef + '.meta.json'), JSON.stringify({ name: normalizeResumeFileName(file.originalname) || 'resume', mime: file.mimetype || 'application/octet-stream', size: file.size || 0 }));
+    res.json({ text, fileRef });
+  } catch (error) {
+    await fs.unlink(file.path).catch(() => {});
+    res.status(400).json({ error: error.message });
+  }
+});
+app.post('/api/extract/screenshot', upload.single('screenshot'), async (req, res) => { try { if (!req.file?.mimetype.startsWith('image/')) return res.status(400).json({ error: '请上传有效的岗位截图。' }); if (!process.env.OPENAI_API_KEY) return res.status(503).json({ error: '尚未配置 AI 接口。' }); const image = `data:${req.file.mimetype};base64,${(await fs.readFile(req.file.path)).toString('base64')}`; const prompt = '识别这张招聘岗位截图。完整保留职责、要求、薪资、地点、公司和岗位名称，不要补充图片中不存在的信息。输出严格 JSON：{"company_short_name":"","job_title":"","text":"","warnings":[]}。公司简称应去掉有限公司等工商后缀；无法确认的内容留空并放入 warnings。'; const payload = await callResponses({ model: process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: image }] }], text: { format: { type: 'json_object' } } }); const result = JSON.parse(outputText(payload) || '{}'); res.json({ text: result.text || '', companyShortName: result.company_short_name || '', jobTitle: result.job_title || '', warnings: result.warnings || [] }); } catch (error) { res.status(502).json({ error: `AI 截图识别失败：${error.message}` }); } finally { if (req.file?.path) await fs.unlink(req.file.path).catch(() => {}); } });
 app.post('/api/analyze', async (req, res) => {
   if (!process.env.OPENAI_API_KEY) return res.status(503).json({ error: '尚未配置 OPENAI_API_KEY，不能生成真实 AI 报告。' });
   const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录后生成报告。' });
@@ -139,6 +203,23 @@ app.use((req, res, next) => {
   if (isMobileUA(req.headers['user-agent'])) return sendH5(req, res);
   return sendPc(req, res);
 });
+// 临时文件清理：uploads 超过 1 小时、简历暂存区超过 24 小时未保存的文件删除
+async function cleanupTempFiles() {
+  const now = Date.now();
+  const sweep = async (dir, maxAgeMs) => {
+    let entries;
+    try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const p = path.join(dir, entry.name);
+      try { const stat = await fs.stat(p); if (now - stat.mtimeMs > maxAgeMs) await fs.rm(p, { force: true }); } catch {}
+    }
+  };
+  await sweep(uploadDir, 60 * 60 * 1000);
+  await sweep(resumeStagingDir, 24 * 60 * 60 * 1000);
+}
+cleanupTempFiles();
+setInterval(cleanupTempFiles, 60 * 60 * 1000).unref();
 const port = Number(process.env.PORT || 3215);
 const host = process.env.HOST || '127.0.0.1';
 app.listen(port, host, () => console.log(`岗位镜运行在 http://${host}:${port}`));

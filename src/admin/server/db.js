@@ -14,6 +14,11 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   expires_at timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS admin_sessions_admin_id_idx ON admin_sessions(admin_id);
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_file_name text;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_file_mime text;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_file_size integer;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_file_path text;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_file_uploaded_at timestamptz;
 CREATE TABLE IF NOT EXISTS admin_settings (
   id integer PRIMARY KEY DEFAULT 1,
   site_name text NOT NULL DEFAULT '岗位镜管理后台',
@@ -196,6 +201,12 @@ export function createPgStore() {
     },
     async deleteUser(id) {
       await pool.query('DELETE FROM ' + userTable + ' WHERE id = $1', [id]);
+    },
+    async clearResumeFile(id) {
+      await pool.query(
+        'UPDATE ' + userTable + ' SET resume_file_name = NULL, resume_file_mime = NULL, resume_file_size = NULL, resume_file_path = NULL, resume_file_uploaded_at = NULL WHERE id = $1',
+        [id]
+      );
     },
 
     // ===== 报告管理 =====

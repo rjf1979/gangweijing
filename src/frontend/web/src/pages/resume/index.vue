@@ -81,6 +81,7 @@ export default {
   data() {
     return {
       file: null,
+      fileRef: '',
       progress: 0,
       uploadState: 'idle', // idle | uploading | extracting
       progressLabel: '',
@@ -112,6 +113,7 @@ export default {
       try {
         const f = await chooseResumeFile()
         this.file = f
+        this.fileRef = ''
         this.progress = 0
         this.uploadState = 'idle'
       } catch (e) {
@@ -139,6 +141,7 @@ export default {
         this.uploadState = 'extracting'
         this.progressLabel = '正在提取简历文本…'
         this.text = data.text || ''
+        this.fileRef = data.fileRef || ''
         this.uploadState = 'idle'
         this.progressLabel = ''
         uni.setStorageSync('resumeDraft', this.text)
@@ -156,7 +159,7 @@ export default {
       if (!text) { this.saveError = '简历内容不能为空。'; return }
       this.saving = true
       try {
-        await api.put('/api/resume', { text: text })
+        await api.put('/api/resume', { text: text, fileRef: this.fileRef })
         uni.setStorageSync('resumeDraft', text)
         this.savedOk = true
         uni.showToast({ title: '已保存', icon: 'success' })
