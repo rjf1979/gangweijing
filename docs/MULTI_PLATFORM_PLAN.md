@@ -1,4 +1,4 @@
-﻿# 多端混合演进方案（MULTI_PLATFORM_PLAN）
+# 多端混合演进方案（MULTI_PLATFORM_PLAN）
 
 > 目标：在不动后端 API 的前提下，让「岗位镜」同时覆盖 Web、微信小程序、iOS/Android App。
 > 路线：混合演进 —— 短期快速上线（套壳），中期按需原生增量（uni-app），长期看数据决定 App 原生化。
@@ -81,3 +81,14 @@
 - web-view 内嵌 H5 体验一般 → 阶段 2 原生页面替代。
 - 现有 AI 分析为同步请求（刷新丢失）→ 多端统一改为异步任务 + 轮询（独立优化项）。
 - 上架合规（隐私、备案、开发者账号）。
+
+## 八、目录工程化落地（2026-08-07）
+
+- 决策 3 已落地：uni-app 工程从 miniapp/ 移入 **web/**，与 **server/** 并列管理；仓库根只保留 README/LICENSE/.gitignore/docs/.codex。
+- 旧 Web 三件套（index.html/app.js/styles.css）归档至 web/legacy/，保留参考不再维护。
+- 计划文档与样式参考统一归入 docs/。
+- **PC/H5 适配**：globalStyle 增加 rpx 宽屏换算（rpxCalcMaxDeviceWidth 1920、rpxCalcBaseDeviceWidth 750）；App.vue 增加 ≥768px 媒体查询（.page max-width 880px 居中、.card 收窄）——小程序与 App 端不触发，H5 宽屏居中阅读。
+- **三端编译验证通过**：npm run build:h5（dist/build/h5）、build:mp-weixin（dist/build/mp-weixin）、build:app（dist/build/app）。
+- **server.js 托管 H5**：静态托管 web/dist/build/h5，非 API 路径 fallback 到 H5 SPA；旧 URL 重定向 /report/:token、/verify-email/:token、/my-resume → 对应 hash 页。
+- 后端 currentSession 兼容 X-Session-Token header（小程序双头，Web 不受影响）。
+- 待确认：微信 appid、小程序真机合法域名配置、App 打包与上架（由用户决定）。

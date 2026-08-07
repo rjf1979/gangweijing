@@ -37,6 +37,8 @@
     "navigationBarTextStyle": "white",
     "navigationBarTitleText": "岗位镜",
     "navigationBarBackgroundColor": "#111111",
-    "backgroundColor": "#f7f5ee"
+    "backgroundColor": "#f7f5ee",
+    "rpxCalcMaxDeviceWidth": 1920,
+    "rpxCalcBaseDeviceWidth": 750
   }
 }

@@ -61,10 +61,13 @@ async function sendReportEmail(email, reportUrl, report) {
   return sendEmail({ to: [email], subject: '你的岗位镜分析报告已完成', html: `<h1>岗位分析已完成</h1><p>${escapeHtml(report.summary || '已生成岗位与简历的分维度分析。')}</p><p><a href="${escapeHtml(reportUrl)}">查看完整分析报告</a></p><p>请保存好此地址。持有链接的人可以查看报告，请勿公开分享。</p>` });
 }
 app.use(express.json());
-const sendApp = (req, res) => res.sendFile(path.join(root, 'index.html'));
-app.get('/', sendApp);
-app.get('/app.js', (req, res) => res.sendFile(path.join(root, 'app.js')));
-app.get('/styles.css', (req, res) => res.sendFile(path.join(root, 'styles.css')));
+// ===== 前端托管：uni-app H5 构建产物（多端混合演进，2026-08-07）=====
+// 旧前端（index.html/app.js/styles.css）已归档到 web/legacy/，不再托管。
+const h5Dir = path.join(root, '..', 'web', 'dist', 'build', 'h5');
+const sendH5 = (req, res) => res.sendFile(path.join(h5Dir, 'index.html'));
+const h5 = (hashPath) => (req, res) => res.redirect('/#' + hashPath);
+app.use(express.static(h5Dir));
+app.get('/', sendH5);
 app.post('/api/register', async (req, res) => {
   const { email, password } = req.body;
   const normalizedEmail = String(email || '').trim().toLowerCase();
@@ -106,11 +109,20 @@ app.post('/api/analyze', async (req, res) => {
 });
 app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = publicAppUrl(); const reports = db.reports.filter(item => item.userId === user.id || (!item.userId && item.email === user.email)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null })); res.json({ reports }); });
 app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, report: record.report }); });
-app.get('/report/:token', sendApp);
-app.get('/verify-email/:token', sendApp);
-app.get(['/resume', '/facts', '/job', '/report'], sendApp);
-app.get('/reports', sendApp);
-app.get('/my-resume', sendApp);
+// 旧 URL -> uni-app H5 页面重定向（邮件链接与旧书签不失效）
+app.get('/report/:token', (req, res) => res.redirect('/#/pages/report/detail?token=' + encodeURIComponent(req.params.token)));
+app.get('/verify-email/:token', (req, res) => res.redirect('/#/pages/auth/index?verify=' + encodeURIComponent(req.params.token)));
+app.get('/resume', h5('/pages/resume/index'));
+app.get('/facts', h5('/pages/facts/index'));
+app.get('/job', h5('/pages/job/index'));
+app.get('/report', h5('/pages/report/list'));
+app.get('/reports', h5('/pages/report/list'));
+app.get('/my-resume', h5('/pages/my/index'));
+// 其它非 API/静态路径 fallback 到 H5 SPA
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/') || req.path.startsWith('/assets/')) return next();
+  return sendH5(req, res);
+});
 const port = Number(process.env.PORT || 3215);
 const host = process.env.HOST || '127.0.0.1';
 app.listen(port, host, () => console.log(`岗位镜运行在 http://${host}:${port}`));

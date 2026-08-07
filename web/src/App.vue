@@ -160,4 +160,17 @@ page {
 /* 状态提示 */
 .error { color: #b3261e; font-size: 26rpx; font-weight: 700; margin-top: 12rpx; }
 .success { color: #16794a; font-size: 26rpx; font-weight: 700; margin-top: 12rpx; }
+
+/* ===== PC / 宽屏适配（H5 端，小程序与 App 不触发）===== */
+@media screen and (min-width: 768px) {
+  .page {
+    max-width: 880px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .card {
+    margin-left: 28rpx;
+    margin-right: 28rpx;
+  }
+}
 </style>
