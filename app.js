@@ -171,6 +171,15 @@ async function verifyEmailPage() {
   $('#verification-title').textContent = response.ok ? '邮箱验证成功' : '验证链接不可用';
   $('#verification-copy').textContent = response.ok ? '你的邮箱已经完成验证，现在可以生成并接收岗位分析报告。' : data.error;
   $('#verification-status').textContent = response.ok ? '验证状态已保存到账号。' : '登录后可以重新发送验证邮件。';
+  if (response.ok) {
+    const session = await fetch('/api/session').then(r => r.json()).catch(() => ({ authenticated: false }));
+    const resume = await fetch('/api/resume').then(r => r.json()).catch(() => ({ hasResume: false }));
+    const hasResume = session.authenticated && Boolean(resume.hasResume);
+    const next = $('#verification-continue');
+    if (hasResume) { next.textContent = '去上传岗位，开始分析'; next.href = '/job'; $('#verification-copy').textContent = '你的邮箱已经完成验证，简历已就绪。接下来上传岗位截图或粘贴职位描述，开始分析。'; }
+    else if (session.authenticated) { next.textContent = '去上传简历'; next.href = '/resume'; $('#verification-copy').textContent = '你的邮箱已经完成验证。接下来先上传简历，再开始岗位分析。'; }
+    else { next.textContent = '去登录，继续使用'; next.href = '/'; $('#verification-copy').textContent = '你的邮箱已经完成验证。请登录后继续上传简历并开始岗位分析。'; }
+  }
   $('#verification-continue').classList.remove('hidden'); setLoading(false); return true;
 }
 async function resumePage() {
