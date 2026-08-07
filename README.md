@@ -7,30 +7,29 @@ AI 求职材料审阅工具：上传简历 → 确认事实 → 上传岗位图�
 ```
 candidate-fit-tool/
 ├── src/                 # 代码区域
-│   ├── server/          # 核心后端 Node/Express：server.js、db.js、.env、scripts/、traineddata/
-│   ├── frontend/        # 用户端前端 uni-app + Vue3：一套代码编译 H5 / 微信小程序 / App，含 PC 端
-│   └── admin/           # 独立管理后台（admin/server 后端 + admin/web 前端）
+│   ├── admin/           # 管理端应用：admin/server（后端）+ admin/web（前端）
+│   └── frontend/        # 用户端应用：frontend/server（核心后端）+ frontend/web（前端）
 ├── docs/                # 产品与开发文档（多端方案、UI 改造、产品流程等）
 └── .codex/              # 项目记忆（memory/）
 ```
 
-## 后端（src/server/）
+## 核心后端（src/frontend/server/）
 
 ```bash
-cd src/server
+cd src/frontend/server
 npm install
 node --env-file=.env server.js   # 默认端口 3215（PORT 可覆盖）
 ```
 
 - API 前缀 `/api/*`；生产域名 https://gwj.zhicha.io（发布由用户决定）。
-- server.js 同时托管 H5 构建产物（src/frontend/dist/build/h5），并兼容旧 URL 重定向（/report/:token、/verify-email/:token、/my-resume 等）。
+- server.js 同时托管 H5 与 PC 构建产物（构建后拷至 src/frontend/server/public/h5、public/pc，按 UA 分流），并兼容旧 URL 重定向（/report/:token、/verify-email/:token、/my-resume 等）。
 
-## 前端（src/frontend/）
+## 用户端前端（src/frontend/web/）
 
 uni-app + Vue3 工程，一套代码多端编译，PC（宽屏）与移动端自适应；H5 亦兼容微信小程序与 App 打包。
 
 ```bash
-cd src/frontend
+cd src/frontend/web
 npm install
 npm run dev:h5            # H5 开发（vite 代理到 127.0.0.1:3215）
 npm run build:h5          # 构建 H5 → dist/build/h5（server 直接托管）
