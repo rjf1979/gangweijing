@@ -2,6 +2,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { store, refreshSession, showLoading, hideLoading } from './store'
 import WelcomeView from './views/WelcomeView.vue'
+import HomeView from './views/HomeView.vue'
 import VerificationView from './views/VerificationView.vue'
 import FlowView from './views/FlowView.vue'
 import MyResumeView from './views/MyResumeView.vue'
@@ -9,7 +10,12 @@ import ReportsView from './views/ReportsView.vue'
 import ShareReportView from './views/ShareReportView.vue'
 
 const routes = [
-  { path: '/', name: 'welcome', component: WelcomeView },
+  { path: '/', name: 'home', component: HomeView, meta: { requiresAuth: true } },
+  { path: '/login', name: 'welcome', component: WelcomeView, beforeEnter: async () => {
+    if (!store.sessionChecked) await refreshSession()
+    if (!store.authenticated) return true
+    return store.user?.emailVerified ? { path: '/' } : { path: '/verify' }
+  } },
   { path: '/verify', name: 'verify-notice', component: VerificationView, props: { mode: 'notice' } },
   { path: '/verify-email/:token', name: 'verify-email', component: VerificationView, props: { mode: 'verify-link' } },
   { path: '/resume', name: 'resume', component: FlowView, props: { step: 'resume' }, meta: { requiresAuth: true } },
@@ -37,7 +43,7 @@ router.beforeEach(async (to, from) => {
   }
   if (to.meta.requiresAuth && !store.authenticated) {
     store.redirectAfterLogin = to.fullPath
-    return { path: '/' }
+    return { path: '/login' }
   }
   if (to.meta.requiresAuth && store.authenticated && !store.user?.emailVerified) {
     return { path: '/verify' }

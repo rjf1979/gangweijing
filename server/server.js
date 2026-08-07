@@ -61,10 +61,9 @@ async function sendReportEmail(email, reportUrl, report) {
   return sendEmail({ to: [email], subject: '你的岗位镜分析报告已完成', html: `<h1>岗位分析已完成</h1><p>${escapeHtml(report.summary || '已生成岗位与简历的分维度分析。')}</p><p><a href="${escapeHtml(reportUrl)}">查看完整分析报告</a></p><p>请保存好此地址。持有链接的人可以查看报告，请勿公开分享。</p>` });
 }
 app.use(express.json());
-// ===== 前端托管：uni-app H5 构建产物（多端混合演进，2026-08-07）=====
-// PC 版（Vue3）源码在 web/src/pc，构建产物 web/dist/pc；老版三件套保留在 web/pc 作为参考蓝本。
-const h5Dir = path.join(root, '..', 'web', 'dist', 'build', 'h5');
-const pcDir = path.join(root, '..', 'web', 'dist', 'pc');
+// 前端构建产物随发行包一起部署，避免依赖服务器工作目录外的文件。
+const h5Dir = path.join(root, 'public', 'h5');
+const pcDir = path.join(root, 'public', 'pc');
 const sendH5 = (req, res) => res.sendFile(path.join(h5Dir, 'index.html'));
 const sendPc = (req, res) => res.sendFile(path.join(pcDir, 'index.html'));
 const isMobileUA = ua => /Mobile|Android|iPhone|iPad|iPod|Windows Phone|IEMobile|webOS|BlackBerry|MicroMessenger/i.test(ua || '');
