@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   color-scheme: light;
   --color-bg: #f7f5ee;
   --color-ink: #111111;
@@ -178,7 +178,7 @@ main { width: 100%; }
   max-width: 680px;
   margin: var(--space-4) 0 0;
   font-size: clamp(44px, 7vw, 78px);
-  line-height: 1.02;
+  line-height: 1.4;
   font-weight: 950;
 }
 .auth-intro mark {
