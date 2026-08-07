@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="settings">
     <div v-if="loading" class="card settings-loading">
       <div class="skeleton settings-skeleton" role="status"></div>
@@ -82,7 +82,7 @@
             <div class="field">
               <label class="field-label" for="ai-vision-model">视觉模型</label>
               <input id="ai-vision-model" v-model.trim="aiForm.visionModel" class="input" placeholder="gpt-4o-mini" />
-              <p class="field-hint">预留的兜底视觉模型；若已在「AI 设置」配置并启用默认 OCR 模型，则以模型库为准。</p>
+              <p class="field-hint">预留的兜底视觉模型；若已在「AI 设置」配置并启用支持多模态的模型，则以模型库为准。</p>
             </div>
           </div>
           <div class="field">

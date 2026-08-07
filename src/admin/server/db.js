@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Pool } from 'pg';
 
 const schema = `
@@ -57,9 +58,29 @@ CREATE TABLE IF NOT EXISTS ai_models (
   context_window integer,
   enabled boolean NOT NULL DEFAULT true,
   is_default boolean NOT NULL DEFAULT false,
+  multimodal boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
   UNIQUE (provider, model_id)
+);
+ALTER TABLE ai_models ADD COLUMN IF NOT EXISTS multimodal boolean NOT NULL DEFAULT false;
+-- 迁移：旧的 OCR 类型或勾选过“同时用于 OCR”的模型 -> 视为支持多模态（文本/OCR 统一为 text）
+ALTER TABLE ai_models ADD COLUMN IF NOT EXISTS also_ocr boolean NOT NULL DEFAULT false;
+UPDATE ai_models SET model_type = 'text', multimodal = true WHERE model_type = 'ocr' OR also_ocr = true;
+ALTER TABLE ai_models DROP COLUMN IF EXISTS also_ocr;
+CREATE TABLE IF NOT EXISTS ai_model_reference_prices (
+  id uuid PRIMARY KEY,
+  provider_key text NOT NULL,
+  provider text NOT NULL,
+  model_id text NOT NULL,
+  display_name text,
+  context_length integer,
+  input_price numeric,
+  output_price numeric,
+  fetched_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  UNIQUE (model_id)
 );
 UPDATE admin_settings
 SET site_name = '岗位镜管理后台', announcement = '', updated_at = now()
@@ -90,8 +111,19 @@ const mapAiModel = row => row && ({
   contextWindow: row.context_window == null ? null : Number(row.context_window),
   enabled: Boolean(row.enabled),
   isDefault: Boolean(row.is_default),
+  multimodal: Boolean(row.multimodal),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
+});
+const mapReferencePrice = row => row && ({
+  providerKey: row.provider_key,
+  provider: row.provider,
+  modelId: row.model_id,
+  displayName: row.display_name,
+  contextLength: row.context_length == null ? null : Number(row.context_length),
+  inputPrice: row.input_price == null ? null : Number(row.input_price),
+  outputPrice: row.output_price == null ? null : Number(row.output_price),
+  fetchedAt: row.fetched_at,
 });
 
 export function createPgStore() {
@@ -188,9 +220,9 @@ export function createPgStore() {
       const existing = await pool.query('SELECT 1 FROM ai_models WHERE provider = $1 AND model_id = $2', [input.provider, input.modelId]);
       if (existing.rows.length) return { conflict: true };
       const { rows } = await pool.query(
-        `INSERT INTO ai_models (id, provider, model_id, display_name, model_type, official_url, api_base_url, api_protocol, input_price, output_price, context_window, enabled, is_default, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now(),now()) RETURNING *`,
-        [input.id, input.provider, input.modelId, input.displayName || null, input.modelType, input.officialUrl || null, input.apiBaseUrl || null, input.apiProtocol, input.inputPrice, input.outputPrice, input.contextWindow, Boolean(input.enabled !== false), Boolean(input.isDefault)]
+        `INSERT INTO ai_models (id, provider, model_id, display_name, model_type, official_url, api_base_url, api_protocol, input_price, output_price, context_window, enabled, is_default, multimodal, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now(),now()) RETURNING *`,
+        [input.id, input.provider, input.modelId, input.displayName || null, input.modelType, input.officialUrl || null, input.apiBaseUrl || null, input.apiProtocol, input.inputPrice, input.outputPrice, input.contextWindow, Boolean(input.enabled !== false), Boolean(input.isDefault), Boolean(input.multimodal)]
       );
       return { conflict: false, model: mapAiModel(rows[0]) };
     },
@@ -210,6 +242,7 @@ export function createPgStore() {
       if ('contextWindow' in input) push('context_window', input.contextWindow);
       if ('enabled' in input) push('enabled', Boolean(input.enabled));
       if ('isDefault' in input) push('is_default', Boolean(input.isDefault));
+      if ('multimodal' in input) push('multimodal', Boolean(input.multimodal));
       if (!fields.length) return null;
       values.push(id);
       const { rows } = await pool.query('UPDATE ai_models SET ' + fields.join(', ') + ', updated_at = now() WHERE id = $' + (fields.length + 1) + ' RETURNING *', values);
@@ -234,6 +267,36 @@ export function createPgStore() {
     },
     async clearDefaultAiModel(id) {
       await pool.query('UPDATE ai_models SET is_default = false, updated_at = now() WHERE id = $1', [id]);
+    },
+    // ===== 参考价目（OpenRouter 抓取结果落库，仅作填写参考，不写入正式 AI 配置） =====
+    async listReferencePrices() {
+      const { rows } = await pool.query('SELECT * FROM ai_model_reference_prices ORDER BY provider, model_id');
+      return rows.map(mapReferencePrice);
+    },
+    async getReferenceMeta() {
+      const { rows } = await pool.query('SELECT max(fetched_at) AS fetched_at, count(*)::int AS total FROM ai_model_reference_prices');
+      return { fetchedAt: rows[0]?.fetched_at || null, total: rows[0]?.total || 0 };
+    },
+    async replaceReferencePrices(models, fetchedAt) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM ai_model_reference_prices');
+        for (const m of models) {
+          await client.query(
+            `INSERT INTO ai_model_reference_prices (id, provider_key, provider, model_id, display_name, context_length, input_price, output_price, fetched_at, created_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),now())`,
+            [crypto.randomUUID(), m.providerKey, m.provider, m.id, m.name || null, m.contextLength, m.inputPrice, m.outputPrice, fetchedAt]
+          );
+        }
+        await client.query('COMMIT');
+        return { ok: true, count: models.length };
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     // ===== 统计 =====

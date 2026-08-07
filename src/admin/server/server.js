@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+﻿import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
@@ -106,7 +106,7 @@ const parseNullableInt = value => {
   return Number.isFinite(n) && n >= 0 ? n : null;
 };
 // 大模型公司预设名称（用于选择与展示，参考价目按厂商归类）
-const MODEL_TYPES = ['text', 'ocr'];
+const MODEL_TYPES = ['text'];
 const API_PROTOCOLS = ['chat_completions', 'responses'];
 const PROVIDER_LABELS = {
   openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', deepseek: 'DeepSeek',
@@ -120,34 +120,34 @@ const PROVIDER_LABELS = {
 const REFERENCE_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'deepseek', 'qwen', 'z-ai', 'moonshotai', 'moonshot', 'minimax', 'stepfun', '01-ai', 'baichuan', 'mistralai', 'meta-llama', 'x-ai', 'amazon', 'microsoft', 'cohere', 'perplexity', 'baidu', 'tencent', 'nvidia', 'internlm']);
 
 // 模型类型 / 接口协议 的可选值与中文标签（供前端下拉选择）
-const MODEL_TYPE_LABELS = { text: '文本模型', ocr: 'OCR 模型' };
+const MODEL_TYPE_LABELS = { text: '文本模型' };
 const API_PROTOCOL_LABELS = { chat_completions: 'Chat Completions（/chat/completions）', responses: 'Responses API（/responses）' };
 
-// 各大模型厂商常见模型 ID 建议（文本 / OCR），仅作为填写时的候选提示，不限制自定义
+// 各大模型厂商常见模型 ID 建议（文本 / 多模态视觉），仅作为填写时的候选提示，不限制自定义
 const PROVIDER_KNOWN_MODELS = {
-  openai: { text: ['gpt-5', 'gpt-5-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o3', 'o3-mini', 'o4-mini'], ocr: ['gpt-5', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini'] },
-  anthropic: { text: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022'], ocr: ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022'] },
-  google: { text: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'], ocr: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'] },
-  deepseek: { text: ['deepseek-chat', 'deepseek-reasoner'], ocr: [] },
-  qwen: { text: ['qwen-max', 'qwen-plus', 'qwen-turbo', 'qwen3-max', 'qwen3-plus'], ocr: ['qwen-vl-max', 'qwen-vl-plus', 'qwen2.5-vl-72b-instruct', 'qwen2.5-vl-7b-instruct'] },
-  'z-ai': { text: ['glm-4.5', 'glm-4-plus', 'glm-4-air', 'glm-4-flash', 'glm-4-long'], ocr: ['glm-4v-plus', 'glm-4v-flash', 'glm-4.1v-thinking-flash'] },
-  moonshotai: { text: ['kimi-k2-0711-preview', 'kimi-k2-turbo-preview', 'moonshot-v1-128k', 'moonshot-v1-32k', 'moonshot-v1-8k'], ocr: [] },
-  moonshot: { text: ['kimi-k2-0711-preview', 'kimi-k2-turbo-preview', 'moonshot-v1-128k', 'moonshot-v1-32k', 'moonshot-v1-8k'], ocr: [] },
-  minimax: { text: ['MiniMax-Text-01', 'abab6.5s-chat'], ocr: ['MiniMax-VL-01'] },
-  stepfun: { text: ['step-2-16k', 'step-1-32k'], ocr: ['step-1v-32k', 'step-1o-vision'] },
-  '01-ai': { text: ['yi-lightning', 'yi-large', 'yi-medium'], ocr: ['yi-vision'] },
-  baichuan: { text: ['Baichuan4', 'Baichuan3-Turbo'], ocr: [] },
-  mistralai: { text: ['mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest'], ocr: ['pixtral-large-latest'] },
-  'meta-llama': { text: ['meta-llama/llama-3.3-70b-instruct', 'meta-llama/llama-3.1-405b-instruct'], ocr: ['meta-llama/llama-3.2-90b-vision-instruct'] },
-  'x-ai': { text: ['grok-3', 'grok-2-latest', 'grok-beta'], ocr: ['grok-4-vision', 'grok-2-vision-latest'] },
-  amazon: { text: ['amazon.nova-pro-v1:0', 'amazon.nova-lite-v1:0'], ocr: ['amazon.nova-pro-v1:0'] },
-  microsoft: { text: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'], ocr: ['gpt-4o', 'gpt-4o-mini'] },
-  cohere: { text: ['command-r-plus', 'command-r'], ocr: [] },
-  perplexity: { text: ['sonar-pro', 'sonar'], ocr: [] },
-  baidu: { text: ['ernie-4.0-turbo-8k', 'ernie-3.5-8k'], ocr: ['ernie-4.5-vl-28k', 'ernie-4.0-vl-8k'] },
-  tencent: { text: ['hunyuan-turbos-latest', 'hunyuan-pro'], ocr: ['hunyuan-vision'] },
-  nvidia: { text: ['meta/llama-3.3-70b-instruct', 'deepseek-ai/deepseek-r1'], ocr: ['nvidia/llama-3.2-90b-vision-instruct'] },
-  internlm: { text: ['internlm3.5-22b-chat', 'internlm2.5-20b-chat'], ocr: ['internlm-xcomposer2.5-7b'] },
+  openai: { text: ['gpt-5', 'gpt-5-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o3', 'o3-mini', 'o4-mini'], multimodal: ['gpt-5', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini'] },
+  anthropic: { text: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022'], multimodal: ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022'] },
+  google: { text: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'], multimodal: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'] },
+  deepseek: { text: ['deepseek-chat', 'deepseek-reasoner'], multimodal: [] },
+  qwen: { text: ['qwen-max', 'qwen-plus', 'qwen-turbo', 'qwen3-max', 'qwen3-plus'], multimodal: ['qwen-vl-max', 'qwen-vl-plus', 'qwen2.5-vl-72b-instruct', 'qwen2.5-vl-7b-instruct'] },
+  'z-ai': { text: ['glm-4.5', 'glm-4-plus', 'glm-4-air', 'glm-4-flash', 'glm-4-long'], multimodal: ['glm-4v-plus', 'glm-4v-flash', 'glm-4.1v-thinking-flash'] },
+  moonshotai: { text: ['kimi-k2-0711-preview', 'kimi-k2-turbo-preview', 'moonshot-v1-128k', 'moonshot-v1-32k', 'moonshot-v1-8k'], multimodal: [] },
+  moonshot: { text: ['kimi-k2-0711-preview', 'kimi-k2-turbo-preview', 'moonshot-v1-128k', 'moonshot-v1-32k', 'moonshot-v1-8k'], multimodal: [] },
+  minimax: { text: ['MiniMax-Text-01', 'abab6.5s-chat'], multimodal: ['MiniMax-VL-01'] },
+  stepfun: { text: ['step-2-16k', 'step-1-32k'], multimodal: ['step-1v-32k', 'step-1o-vision'] },
+  '01-ai': { text: ['yi-lightning', 'yi-large', 'yi-medium'], multimodal: ['yi-vision'] },
+  baichuan: { text: ['Baichuan4', 'Baichuan3-Turbo'], multimodal: [] },
+  mistralai: { text: ['mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest'], multimodal: ['pixtral-large-latest'] },
+  'meta-llama': { text: ['meta-llama/llama-3.3-70b-instruct', 'meta-llama/llama-3.1-405b-instruct'], multimodal: ['meta-llama/llama-3.2-90b-vision-instruct'] },
+  'x-ai': { text: ['grok-3', 'grok-2-latest', 'grok-beta'], multimodal: ['grok-4-vision', 'grok-2-vision-latest'] },
+  amazon: { text: ['amazon.nova-pro-v1:0', 'amazon.nova-lite-v1:0'], multimodal: ['amazon.nova-pro-v1:0'] },
+  microsoft: { text: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'], multimodal: ['gpt-4o', 'gpt-4o-mini'] },
+  cohere: { text: ['command-r-plus', 'command-r'], multimodal: [] },
+  perplexity: { text: ['sonar-pro', 'sonar'], multimodal: [] },
+  baidu: { text: ['ernie-4.0-turbo-8k', 'ernie-3.5-8k'], multimodal: ['ernie-4.5-vl-28k', 'ernie-4.0-vl-8k'] },
+  tencent: { text: ['hunyuan-turbos-latest', 'hunyuan-pro'], multimodal: ['hunyuan-vision'] },
+  nvidia: { text: ['meta/llama-3.3-70b-instruct', 'deepseek-ai/deepseek-r1'], multimodal: ['nvidia/llama-3.2-90b-vision-instruct'] },
+  internlm: { text: ['internlm3.5-22b-chat', 'internlm2.5-20b-chat'], multimodal: ['internlm-xcomposer2.5-7b'] },
 };
 
 // 各大模型厂商默认 API 地址与官网价目页（填写时自动作为占位提示，可覆盖）
@@ -192,7 +192,7 @@ function parseAiModelBody(body, partial = false) {
   }
   if (!partial || 'modelType' in body) {
     const modelType = String(body?.modelType || '').trim();
-    if (!MODEL_TYPES.includes(modelType)) return { error: '模型类型必须是文本模型或 OCR 模型。' };
+    if (!MODEL_TYPES.includes(modelType)) return { error: '模型类型必须是文本模型。' };
     out.modelType = modelType;
   }
   if (!partial || 'apiProtocol' in body) {
@@ -208,6 +208,7 @@ function parseAiModelBody(body, partial = false) {
   if ('contextWindow' in body) out.contextWindow = parseNullableInt(body.contextWindow);
   if ('enabled' in body) out.enabled = Boolean(body.enabled);
   if ('isDefault' in body) out.isDefault = Boolean(body.isDefault);
+  if ('multimodal' in body) out.multimodal = Boolean(body.multimodal);
   return out;
 }
 
@@ -483,6 +484,7 @@ app.get('/api/admin/ai-models', requireAdmin, async (req, res) => {
   res.json({
     models,
     defaultTextId: models.find(m => m.modelType === 'text' && m.isDefault)?.id || null,
+    defaultMultimodalId: models.find(m => m.multimodal && m.isDefault)?.id || null,
     defaultOcrId: models.find(m => m.modelType === 'ocr' && m.isDefault)?.id || null,
   });
 });
@@ -546,7 +548,34 @@ app.post('/api/admin/ai-models/:id/default', requireAdmin, async (req, res) => {
   res.json({ ok: true, model: await store.getAiModelById(existing.id) });
 });
 
-// 抓取第三方（OpenRouter）参考价目：仅返回参考数据，不写入正式配置
+const referencePayload = (models, fetchedAt) => {
+  const list = [...models].sort((a, b) => a.provider.localeCompare(b.provider, 'zh-CN') || a.id.localeCompare(b.id));
+  return {
+    fetchedAt: fetchedAt ? new Date(fetchedAt).toISOString() : null,
+    source: 'OpenRouter 第三方代理参考价（非官方账单价），仅作填写参考；抓取结果已保存到参考价目库，不写入正式 AI 配置',
+    total: list.length,
+    providers: [...new Set(list.map(m => m.provider))],
+    models: list,
+  };
+};
+
+// 读取已保存的参考价目（首次拉取后落库，后续从数据库读取展示）
+app.get('/api/admin/ai-models/reference', requireAdmin, async (req, res) => {
+  const rows = await store.listReferencePrices();
+  const metaInfo = await store.getReferenceMeta();
+  const models = rows.map(r => ({
+    providerKey: r.providerKey,
+    provider: r.provider,
+    id: r.modelId,
+    name: r.displayName,
+    contextLength: r.contextLength,
+    inputPrice: r.inputPrice,
+    outputPrice: r.outputPrice,
+  }));
+  res.json(referencePayload(models, metaInfo.fetchedAt));
+});
+
+// 抓取第三方（OpenRouter）参考价目：拉取后保存到参考价目库，仅作填写参考，不写入正式 AI 配置
 app.post('/api/admin/ai-models/fetch', requireAdmin, async (req, res) => {
   let response;
   try {
@@ -557,6 +586,7 @@ app.post('/api/admin/ai-models/fetch', requireAdmin, async (req, res) => {
   if (!response.ok) return res.status(502).json({ error: `参考价目抓取失败：OpenRouter 返回 ${response.status}` });
   const data = await response.json().catch(() => null);
   const raw = Array.isArray(data?.data) ? data.data : [];
+  const fetchedAt = new Date();
   const models = raw
     .map(m => {
       const pricing = m.pricing || {};
@@ -574,15 +604,9 @@ app.post('/api/admin/ai-models/fetch', requireAdmin, async (req, res) => {
         outputPrice: outputPrice == null || !Number.isFinite(outputPrice) ? null : Math.round(outputPrice * 10000) / 10000,
       };
     })
-    .filter(Boolean)
-    .sort((a, b) => a.provider.localeCompare(b.provider, 'zh-CN') || a.id.localeCompare(b.id));
-  res.json({
-    fetchedAt: new Date().toISOString(),
-    source: 'OpenRouter 第三方代理参考价（非官方账单价），仅供填写参考，不会写入正式配置',
-    total: models.length,
-    providers: [...new Set(models.map(m => m.provider))],
-    models,
-  });
+    .filter(Boolean);
+  const saved = await store.replaceReferencePrices(models, fetchedAt);
+  res.json({ ...referencePayload(models, fetchedAt), saved: saved.count });
 });
 
 // ===== 404 处理 =====
@@ -614,3 +638,6 @@ await bootstrap();
 const port = Number(process.env.PORT || 3216);
 const host = process.env.HOST || '127.0.0.1';
 app.listen(port, host, () => console.log(`岗位镜管理后台运行在 http://${host}:${port}`));
+
+
+

@@ -13,7 +13,7 @@
           <div class="ai-head-text">
             <h2 class="card-title">AI 模型库</h2>
             <p class="ai-desc">
-              维护用于简历文本分析与截图 OCR 的大模型。公司、模型 ID、API 地址与价目以人工填写为准；
+              维护用于简历文本分析与截图识别的大模型。公司、模型 ID、API 地址与价目以人工填写为准；
               第三方参考价目只用于辅助填写，不会直接写入。
             </p>
           </div>
@@ -37,8 +37,11 @@
             <span v-else class="summary-value summary-empty">未设置</span>
           </div>
           <div class="summary-item">
-            <span class="summary-label">默认 OCR 模型</span>
-            <span v-if="defaultOcr" class="summary-value mono">{{ defaultOcr.provider }} · {{ defaultOcr.modelId }}</span>
+            <span class="summary-label">截图识别模型</span>
+            <span v-if="screenshotModel" class="summary-value mono">
+              {{ screenshotModel.provider }} · {{ screenshotModel.modelId }}
+              <span class="badge badge-info">多模态</span>
+            </span>
             <span v-else class="summary-value summary-empty">未设置</span>
           </div>
           <div class="summary-item">
@@ -78,6 +81,7 @@
                   <span class="provider-chip">{{ model.provider }}</span>
                   <code class="model-id">{{ model.modelId }}</code>
                   <span v-if="model.isDefault" class="badge badge-success">默认</span>
+                  <span v-if="model.multimodal" class="badge badge-info">多模态</span>
                 </div>
                 <div v-if="model.displayName" class="model-sub">{{ model.displayName }}</div>
                 <div class="model-meta">
@@ -137,18 +141,15 @@
                   </div>
 
                   <div class="field">
-                    <label class="field-label" for="model-type">模型类型</label>
-                    <select id="model-type" v-model="form.modelType" class="select" @change="onModelTypeChange">
-                      <option v-for="t in meta.modelTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
-                    </select>
-                    <p class="field-hint">文本模型用于简历内容分析；OCR 模型用于截图识别，建议选支持视觉输入的模型。</p>
-                  </div>
-
-                  <div class="field">
                     <label class="field-label" for="model-protocol">接口协议</label>
                     <select id="model-protocol" v-model="form.apiProtocol" class="select">
                       <option v-for="p in meta.apiProtocols" :key="p.value" :value="p.value">{{ p.label }}</option>
                     </select>
+                  </div>
+
+                  <div class="field">
+                    <label class="field-label" for="model-display">显示名称</label>
+                    <input id="model-display" v-model.trim="form.displayName" class="input" maxlength="120" placeholder="可选，便于识别" />
                   </div>
 
                   <div class="field field-span-2">
@@ -166,16 +167,11 @@
                       <option v-for="s in modelSuggestions" :key="s" :value="s"></option>
                     </datalist>
                     <div class="field-inline">
-                      <p class="field-hint">调用接口时实际使用的模型标识；输入时可按厂商+类型提示常见 ID。</p>
+                      <p class="field-hint">调用接口时实际使用的模型标识；输入时可按厂商与是否多模态提示常见 ID。</p>
                       <button class="btn btn-sm btn-ghost" type="button" @click="openReference">
                         <AppIcon name="download" :size="13" /> 从参考价目填入
                       </button>
                     </div>
-                  </div>
-
-                  <div class="field">
-                    <label class="field-label" for="model-display">显示名称</label>
-                    <input id="model-display" v-model.trim="form.displayName" class="input" maxlength="120" placeholder="可选，便于识别" />
                   </div>
 
                   <div class="field">
@@ -192,16 +188,17 @@
                     <input id="model-output-price" v-model.number="form.outputPrice" class="input" type="number" min="0" step="0.0001" placeholder="例如 0.6" />
                   </div>
 
+                  <div class="field">
+                    <label class="field-label" for="model-official-url">官网地址（可选）</label>
+                    <input id="model-official-url" v-model.trim="form.officialUrl" class="input" :placeholder="officialUrlPlaceholder" />
+                  </div>
+
                   <div class="field field-span-2">
                     <label class="field-label" for="model-base-url">API 地址（Base URL）</label>
                     <input id="model-base-url" v-model.trim="form.apiBaseUrl" class="input" :placeholder="baseUrlPlaceholder" />
                     <p class="field-hint">按接口协议拼接 /chat/completions 或 /responses 调用；留空表示不覆盖，沿用旧配置。</p>
                   </div>
 
-                  <div class="field field-span-2">
-                    <label class="field-label" for="model-official-url">官网地址（可选）</label>
-                    <input id="model-official-url" v-model.trim="form.officialUrl" class="input" :placeholder="officialUrlPlaceholder" />
-                  </div>
                 </div>
 
                 <div class="form-grid form-switches">
@@ -215,7 +212,15 @@
                     <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
                     <span class="switch-text">设为该类型的默认模型</span>
                   </label>
+                  <label class="switch">
+                    <input v-model="form.multimodal" type="checkbox" />
+                    <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+                    <span class="switch-text">支持多模态（视觉输入）</span>
+                  </label>
                 </div>
+                <p class="field-hint">
+                  勾选后，截图识别（OCR）将复用该模型；请确认模型本身支持图片/视觉输入。
+                </p>
 
                 <p v-if="formError" class="field-error" role="alert">{{ formError }}</p>
               </div>
@@ -244,15 +249,15 @@
 
             <div class="modal-body">
               <p class="ref-note">
-                数据来源：OpenRouter 第三方代理（非各厂商官方账单价）。仅作填写参考，点「填入」后
-                <strong>仍需手动确认</strong>模型 ID 与 API 地址，并点击保存才会写入正式配置。
+                数据来源：OpenRouter 第三方代理（非各厂商官方账单价）。抓取结果会<strong>保存到参考价目库</strong>，仅作填写参考；
+                点「填入」后<strong>仍需手动确认</strong>模型 ID 与 API 地址，并点击保存才会写入正式 AI 配置。
               </p>
 
               <div v-if="!refData" class="ref-init">
-                <p>拉取国内外知名大模型厂商在 OpenRouter 上的模型与价位参考（约 20 家厂商）。</p>
+                <p>尚未拉取过参考价目。首次拉取会把国内外知名大模型厂商的模型与价位（约 20 家）记录到数据库，后续可手动更新。</p>
                 <button class="btn btn-primary" type="button" :disabled="fetchingRef" @click="fetchReference">
                   <AppIcon name="download" :size="15" />
-                  {{ fetchingRef ? '拉取中…' : '拉取参考价目' }}
+                  {{ fetchingRef ? '拉取中…' : '首次拉取价目' }}
                 </button>
                 <p v-if="refError" class="field-error" role="alert">{{ refError }}</p>
               </div>
@@ -265,7 +270,13 @@
                   </select>
                   <input v-model.trim="refKeyword" class="input ref-search" type="search" placeholder="搜索模型 ID / 名称" aria-label="搜索模型" />
                   <span class="ref-count">共 {{ filteredRef.length }} 条</span>
+                  <span v-if="refData.fetchedAt" class="ref-updated" title="最近一次抓取保存时间">上次更新 {{ formatDateTime(refData.fetchedAt) }}</span>
+                  <button class="btn btn-sm" type="button" :disabled="fetchingRef" @click="fetchReference">
+                    <AppIcon name="download" :size="13" />
+                    {{ fetchingRef ? '更新中…' : '手动更新' }}
+                  </button>
                 </div>
+                <p v-if="refError" class="field-error" role="alert">{{ refError }}</p>
 
                 <div class="table-wrap ref-table-wrap">
                   <table class="table ref-table">
@@ -330,7 +341,7 @@ const error = ref('')
 const models = ref([])
 const meta = ref({
   providers: [],
-  modelTypes: [{ value: 'text', label: '文本模型' }, { value: 'ocr', label: 'OCR 模型' }],
+  modelTypes: [{ value: 'text', label: '文本模型' }],
   apiProtocols: [],
   knownModels: {},
   providerDefaults: {},
@@ -355,6 +366,7 @@ const form = reactive({
   contextWindow: null,
   enabled: true,
   isDefault: false,
+  multimodal: false,
 })
 const editingId = ref(null)
 const providerChoice = ref('')
@@ -372,11 +384,16 @@ const deleteTarget = ref(null)
 const deleting = ref(false)
 
 const groups = computed(() => [
-  { type: 'text', label: '文本模型', items: models.value.filter(m => m.modelType === 'text') },
-  { type: 'ocr', label: 'OCR 模型', items: models.value.filter(m => m.modelType === 'ocr') },
+  { type: 'all', label: '全部模型', items: models.value },
 ])
 const defaultText = computed(() => models.value.find(m => m.modelType === 'text' && m.isDefault) || null)
-const defaultOcr = computed(() => models.value.find(m => m.modelType === 'ocr' && m.isDefault) || null)
+// 截图识别模型：优先默认文本模型且支持多模态，其次任意启用的多模态模型
+const screenshotModel = computed(() => {
+  if (!models.value.length) return null
+  const def = models.value.find(m => m.multimodal && m.isDefault && m.enabled) || null
+  if (def) return def
+  return models.value.find(m => m.multimodal && m.enabled) || null
+})
 const enabledCount = computed(() => models.value.filter(m => m.enabled).length)
 
 const providerOptions = computed(() => [
@@ -390,11 +407,12 @@ const providerKey = computed(() => {
 })
 const baseUrlPlaceholder = computed(() => providerKey.value ? (meta.value.providerDefaults[providerKey.value]?.apiBaseUrl || 'https://…/v1') : 'https://…/v1')
 const officialUrlPlaceholder = computed(() => providerKey.value ? (meta.value.providerDefaults[providerKey.value]?.officialUrl || 'https://…') : 'https://…')
+const suggestionKind = computed(() => (form.multimodal ? 'multimodal' : 'text'))
 const modelIdPlaceholder = computed(() => {
-  const known = meta.value.knownModels[providerKey.value]?.[form.modelType] || []
+  const known = meta.value.knownModels[providerKey.value]?.[suggestionKind.value] || []
   return providerKey.value ? `例如 ${known[0] || 'model-id'}` : '输入模型 ID'
 })
-const modelSuggestions = computed(() => meta.value.knownModels[providerKey.value]?.[form.modelType] || [])
+const modelSuggestions = computed(() => meta.value.knownModels[providerKey.value]?.[suggestionKind.value] || [])
 
 const filteredRef = computed(() => {
   let list = refData.value?.models || []
@@ -414,6 +432,12 @@ function formatNumber(value) {
   if (value == null) return '—'
   return new Intl.NumberFormat('zh-CN').format(value)
 }
+function formatDateTime(value) {
+  if (!value) return '—'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return '—'
+  return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(d)
+}
 
 function resetForm() {
   form.provider = ''
@@ -428,6 +452,7 @@ function resetForm() {
   form.contextWindow = null
   form.enabled = true
   form.isDefault = false
+  form.multimodal = false
   providerChoice.value = ''
   editingId.value = null
   formError.value = ''
@@ -474,6 +499,7 @@ function openEdit(model) {
   form.contextWindow = model.contextWindow
   form.enabled = model.enabled
   form.isDefault = model.isDefault
+  form.multimodal = Boolean(model.multimodal)
   const hit = meta.value.providers.find(p => p.label === model.provider)
   providerChoice.value = hit ? hit.key : '__custom__'
   formOpen.value = true
@@ -496,10 +522,6 @@ function onProviderChange() {
   }
 }
 
-function onModelTypeChange() {
-  // 切换类型后模型 ID 建议会跟随刷新；已填内容保留
-}
-
 async function saveModel() {
   formError.value = ''
   const provider = form.provider.trim()
@@ -519,6 +541,7 @@ async function saveModel() {
     contextWindow: form.contextWindow,
     enabled: form.enabled,
     isDefault: form.isDefault,
+    multimodal: form.multimodal,
   }
   saving.value = true
   try {
@@ -585,10 +608,21 @@ async function confirmDelete() {
 
 function openReference() {
   refOpen.value = true
-  if (!refData.value) fetchReference()
+  if (!refData.value) loadReference()
 }
 function closeReference() {
   refOpen.value = false
+}
+async function loadReference() {
+  refError.value = ''
+  try {
+    const data = await api.get('/ai-models/reference')
+    refData.value = data.total > 0 ? data : null
+    refProvider.value = ''
+    refKeyword.value = ''
+  } catch (err) {
+    refError.value = err.message || '读取参考价目失败。'
+  }
 }
 async function fetchReference() {
   fetchingRef.value = true
@@ -838,6 +872,12 @@ onMounted(loadAll)
   flex-direction: column;
   max-height: calc(100vh - 48px);
 }
+.modal-panel > form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
 .modal-panel.modal-ref {
   max-width: 920px;
 }
@@ -846,6 +886,7 @@ onMounted(loadAll)
   align-items: center;
   gap: 12px;
   padding: 18px 20px 0;
+  flex-shrink: 0;
 }
 .modal-icon {
   display: inline-flex;
@@ -889,6 +930,8 @@ onMounted(loadAll)
   flex-direction: column;
   gap: 14px;
   overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 .modal-foot {
   display: flex;
@@ -897,6 +940,7 @@ onMounted(loadAll)
   padding: 14px 20px;
   border-top: 1px solid var(--color-border);
   background: var(--color-bg-deep);
+  flex-shrink: 0;
 }
 .modal-enter-active,
 .modal-leave-active {
@@ -1041,6 +1085,11 @@ onMounted(loadAll)
   flex: 1;
 }
 .ref-count {
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+.ref-updated {
   font-size: 12.5px;
   color: var(--color-text-muted);
   white-space: nowrap;

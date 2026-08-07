@@ -88,10 +88,16 @@ CREATE TABLE IF NOT EXISTS ai_models (
   context_window integer,
   enabled boolean NOT NULL DEFAULT true,
   is_default boolean NOT NULL DEFAULT false,
+  multimodal boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
   UNIQUE (provider, model_id)
 );
+ALTER TABLE ai_models ADD COLUMN IF NOT EXISTS multimodal boolean NOT NULL DEFAULT false;
+-- 迁移：旧的 OCR 类型或勾选过“同时用于 OCR”的模型 -> 视为支持多模态（文本/OCR 统一为 text）
+ALTER TABLE ai_models ADD COLUMN IF NOT EXISTS also_ocr boolean NOT NULL DEFAULT false;
+UPDATE ai_models SET model_type = 'text', multimodal = true WHERE model_type = 'ocr' OR also_ocr = true;
+ALTER TABLE ai_models DROP COLUMN IF EXISTS also_ocr;
 `;
 
 function selectedUrl() {
@@ -113,6 +119,7 @@ const mapAiModel = row => row && ({
   contextWindow: row.context_window == null ? null : Number(row.context_window),
   enabled: Boolean(row.enabled),
   isDefault: Boolean(row.is_default),
+  multimodal: Boolean(row.multimodal),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -150,7 +157,15 @@ export function createPgStore() {
     },
     async getDefaultAiModel(modelType = 'text') {
       const { rows } = await pool.query('SELECT * FROM ai_models WHERE model_type = $1 AND is_default = true AND enabled = true LIMIT 1', [modelType]);
-      return mapAiModel(rows[0] || null);
+      if (rows[0]) return mapAiModel(rows[0]);
+      // 截图识别：不再区分 OCR 类型，优先选择“支持多模态”的默认模型，其次任意启用的多模态模型
+      if (modelType === 'ocr') {
+        const fb = await pool.query(`SELECT * FROM ai_models WHERE multimodal = true AND is_default = true AND enabled = true LIMIT 1`);
+        if (fb.rows[0]) return mapAiModel(fb.rows[0]);
+        const any = await pool.query(`SELECT * FROM ai_models WHERE multimodal = true AND enabled = true ORDER BY is_default DESC, created_at LIMIT 1`);
+        return mapAiModel(any.rows[0] || null);
+      }
+      return null;
     },
     async findAiModelByModelId(modelId) {
       const { rows } = await pool.query('SELECT * FROM ai_models WHERE LOWER(model_id) = LOWER($1) ORDER BY is_default DESC LIMIT 1', [String(modelId || '')]);
