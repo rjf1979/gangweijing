@@ -287,13 +287,23 @@ app.get('/api/admin/settings', requireAdmin, async (req, res) => {
 });
 
 app.put('/api/admin/settings', express.json(), requireAdmin, async (req, res) => {
-  const siteName = String(req.body?.siteName || '').trim().slice(0, 60);
-  const announcement = String(req.body?.announcement || '').trim().slice(0, 500);
-  const freeQuota = Math.max(0, Math.min(999, parseInt(req.body?.freeQuota, 10) || 0));
-  const registrationEnabled = Boolean(req.body?.registrationEnabled);
-  if (!siteName) return res.status(400).json({ error: '站点名称不能为空。' });
+  const patch = {};
 
-  const patch = { siteName, announcement, freeQuota, registrationEnabled };
+  // 站点设置：仅在请求体包含对应字段时才校验并更新（部分更新）
+  if ('siteName' in req.body) {
+    const siteName = String(req.body.siteName || '').trim().slice(0, 60);
+    if (!siteName) return res.status(400).json({ error: '站点名称不能为空。' });
+    patch.siteName = siteName;
+  }
+  if ('announcement' in req.body) {
+    patch.announcement = String(req.body.announcement || '').trim().slice(0, 500);
+  }
+  if ('freeQuota' in req.body) {
+    patch.freeQuota = Math.max(0, Math.min(999, parseInt(req.body.freeQuota, 10) || 0));
+  }
+  if ('registrationEnabled' in req.body) {
+    patch.registrationEnabled = Boolean(req.body.registrationEnabled);
+  }
 
   // AI 配置：留空或掩码值不覆盖已保存的密钥；显式清除才清空
   const aiApiKey = String(req.body?.aiApiKey || '').trim();
@@ -312,6 +322,8 @@ app.put('/api/admin/settings', express.json(), requireAdmin, async (req, res) =>
   if (req.body?.clearResendKey) patch.resendApiKey = '';
   const emailFrom = String(req.body?.emailFrom || '').trim();
   if ('emailFrom' in req.body) patch.emailFrom = emailFrom || null;
+
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: '没有可保存的配置项。' });
 
   await store.updateSettings(patch);
   res.json({ ok: true });
