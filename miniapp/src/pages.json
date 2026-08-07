@@ -1,0 +1,42 @@
+{
+  "pages": [
+    {
+      "path": "pages/index/index",
+      "style": { "navigationBarTitleText": "岗位镜" }
+    },
+    {
+      "path": "pages/auth/index",
+      "style": { "navigationBarTitleText": "登录 / 注册" }
+    },
+    {
+      "path": "pages/resume/index",
+      "style": { "navigationBarTitleText": "上传简历" }
+    },
+    {
+      "path": "pages/facts/index",
+      "style": { "navigationBarTitleText": "确认简历事实" }
+    },
+    {
+      "path": "pages/job/index",
+      "style": { "navigationBarTitleText": "岗位分析" }
+    },
+    {
+      "path": "pages/report/list",
+      "style": { "navigationBarTitleText": "我的分析报告" }
+    },
+    {
+      "path": "pages/report/detail",
+      "style": { "navigationBarTitleText": "报告详情" }
+    },
+    {
+      "path": "pages/my/index",
+      "style": { "navigationBarTitleText": "我的" }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "岗位镜",
+    "navigationBarBackgroundColor": "#111111",
+    "backgroundColor": "#f7f5ee"
+  }
+}

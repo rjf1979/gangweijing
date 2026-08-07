@@ -19,7 +19,7 @@ await dbStore.init();
 const readDb = () => dbStore.readDb();
 const saveDb = db => dbStore.saveDb(db);
 const sessionCookie = (token, maxAge = 60 * 60 * 24 * 30) => `jm_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
-function currentSession(req, db) { const token = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('jm_session='))?.split('=')[1]; return db.sessions?.find(x => x.token === token && new Date(x.expiresAt) > new Date()); }
+function currentSession(req, db) { const cookie = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('jm_session='))?.split('=')[1] || ''; const token = (req.headers['x-session-token'] || cookie); return db.sessions?.find(x => x.token === token && new Date(x.expiresAt) > new Date()); }
 function currentUser(req, db) { const session = currentSession(req, db); return session && db.users.find(user => user.id === session.userId); }
 const hash = value => crypto.scryptSync(value, 'job-mirror', 64).toString('hex');
 const upload = multer({ dest: uploadDir, limits: { fileSize: 10 * 1024 * 1024 } });
