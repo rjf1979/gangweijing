@@ -415,6 +415,61 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
 .drop small { margin-top: var(--space-2); color: var(--color-ink); }
 .drop.has-file { background: var(--color-green); }
 
+.file-meta {
+  max-width: 100%;
+  margin-top: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-hard-xs);
+  font-size: 14px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.drop.has-file .drop-action { text-decoration: none; }
+.drop.has-file small { font-weight: 700; }
+
+.upload-progress {
+  margin: calc(-1 * var(--space-4)) 0 var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-hard-sm);
+}
+.upload-track {
+  height: 22px;
+  overflow: hidden;
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+}
+.upload-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--color-lime);
+  border-right: var(--border-thin);
+  transition: width var(--motion-fast) ease;
+}
+.upload-progress.is-busy .upload-fill {
+  background-image: linear-gradient(45deg, rgb(17 17 17 / 12%) 25%, transparent 25%, transparent 50%, rgb(17 17 17 / 12%) 50%, rgb(17 17 17 / 12%) 75%, transparent 75%, transparent);
+  background-size: 16px 16px;
+  animation: upload-stripes 0.6s linear infinite;
+}
+@keyframes upload-stripes { to { background-position: 16px 0; } }
+.upload-caption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: 13px;
+  font-weight: 800;
+}
+.upload-caption span:last-child { color: var(--color-muted); font-variant-numeric: tabular-nums; }
+
 .fact-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: var(--space-5); }
 .fact-editor { padding: var(--space-4); border: var(--border-thin); border-radius: var(--radius-sm); background: var(--color-yellow); }
 .fact-editor label { margin-top: 0; }
@@ -553,6 +608,7 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
   .step-index { width: 48px; height: 46px; font-size: 15px; }
   .panel-heading h2 { font-size: 25px; }
   .drop { min-height: 140px; padding: var(--space-4); }
+  .upload-progress { margin: calc(-1 * var(--space-3)) 0 var(--space-4); padding: var(--space-3); }
   .field-row { grid-template-columns: 1fr; gap: 0; }
   .action-row { align-items: stretch; flex-direction: column-reverse; }
   .action-row .neo-button { width: 100%; }

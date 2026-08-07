@@ -38,6 +38,41 @@ function safe(value) {
 function draft() {
   try { return JSON.parse(sessionStorage.getItem('jobMirrorDraft') || '{}'); } catch { return {}; }
 }
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+function setResumeUpload(pct, label = '正在上传简历…', busy = false) {
+  const wrap = $('#resume-upload');
+  if (pct === null) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  $('#resume-upload-bar').style.width = `${Math.max(0, Math.min(100, pct))}%`;
+  $('#resume-upload-percent').textContent = busy ? '…' : `${pct}%`;
+  $('#resume-upload-label').textContent = label;
+  wrap.classList.toggle('is-busy', busy);
+  if (!busy) { const bar = $('#resume-upload-bar-wrap'); bar.setAttribute('aria-valuenow', String(pct)); bar.setAttribute('aria-valuetext', `${pct}%`); }
+}
+function uploadResume(file) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData(); form.append('resume', file);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/extract/resume');
+    xhr.upload.onprogress = event => {
+      if (!event.lengthComputable) return;
+      const pct = Math.round(event.loaded / event.total * 100);
+      if (pct >= 100) setResumeUpload(100, '正在提取简历文本…', true);
+      else setResumeUpload(pct);
+    };
+    xhr.onload = () => {
+      let data = {}; try { data = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data); else reject(new Error(data.error || '简历上传失败，请重试。'));
+    };
+    xhr.onerror = () => reject(new Error('网络异常，请检查连接后重试。'));
+    xhr.send(form);
+  });
+}
 function saveDraft(patch) { sessionStorage.setItem('jobMirrorDraft', JSON.stringify({ ...draft(), ...patch })); }
 async function persistResume(text) { const response = await fetch('/api/resume', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }); if (!response.ok) throw new Error((await response.json()).error || '简历保存失败。'); }
 function currentStep() {
@@ -108,19 +143,40 @@ $('#resend-verification').onclick = async () => {
   $('#verification-status').textContent = response.ok ? (data.verified ? '邮箱已经验证，可以继续使用。' : '验证邮件已重新发送，请检查收件箱和垃圾邮件。') : data.error;
 };
 
+$('#resume-file').addEventListener('change', () => {
+  const file = $('#resume-file').files[0];
+  const meta = $('#resume-file-meta');
+  const drop = document.querySelector('label[for="resume-file"]');
+  if (file) {
+    meta.textContent = `${file.name} · ${formatBytes(file.size)}`;
+    meta.hidden = false;
+    drop.classList.add('has-file');
+    $('#resume-file-status').textContent = '已选择文件，点击可重新选择';
+  } else {
+    meta.hidden = true; meta.textContent = '';
+    drop.classList.remove('has-file');
+    $('#resume-file-status').textContent = 'PDF 或 DOCX，文件仅用于本次分析';
+  }
+});
 $('#resume-next').onclick = async () => {
-  setLoading(true, '正在读取简历', '提取文本并保存到你的账号');
+  const button = $('#resume-next');
   let text = $('#resume-text').value.trim();
   const file = $('#resume-file').files[0];
+  const fail = message => { setResumeUpload(null); setLoading(false); button.disabled = false; button.textContent = '解析简历'; $('#resume-error').textContent = message; };
   if (file) {
-    const form = new FormData(); form.append('resume', file);
-    const response = await fetch('/api/extract/resume', { method: 'POST', body: form });
-    const data = await response.json();
-    if (!response.ok) { setLoading(false); return $('#resume-error').textContent = data.error; }
-    text = data.text; $('#resume-text').value = text;
+    button.disabled = true; button.textContent = '上传中…';
+    try {
+      setResumeUpload(0, '正在上传简历…');
+      const data = await uploadResume(file);
+      text = data.text || '';
+      $('#resume-text').value = text;
+    } catch (error) { return fail(error.message); }
+  } else {
+    setLoading(true, '正在读取简历', '提取文本并保存到你的账号');
   }
-  if (!text) { setLoading(false); return $('#resume-error').textContent = '请上传简历或粘贴简历文本。'; }
-  try { await persistResume(text); } catch (error) { setLoading(false); return $('#resume-error').textContent = error.message; }
+  if (!text) return fail('请上传简历或粘贴简历文本。');
+  try { await persistResume(text); } catch (error) { return fail(error.message); }
+  setResumeUpload(null); button.disabled = false; button.textContent = '解析简历';
   saveDraft({ resumeText: text }); go('facts');
 };
 $('#facts-next').onclick = async () => {
