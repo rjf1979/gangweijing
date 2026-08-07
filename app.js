@@ -5,10 +5,25 @@ const replacingResume = () => new URLSearchParams(location.search).get('mode') =
 let loginMode = true;
 let email = '';
 
+let loadingTimer = null;
 function setLoading(visible, title = '正在加载', tip = '请稍候，马上进入正确页面') {
   $('#loading-title').textContent = title;
   $('#loading-tip').textContent = tip;
-  $('#app-loading').classList.toggle('hidden', !visible);
+  clearTimeout(loadingTimer);
+  if (visible) {
+    // 「正在切换页面」过渡效果最短停留 0.5 秒（跨整页导航生效）
+    if (title === '正在切换页面') sessionStorage.setItem('navAt', String(Date.now()));
+    $('#app-loading').classList.remove('hidden');
+    return;
+  }
+  const navAt = Number(sessionStorage.getItem('navAt') || 0);
+  const remain = navAt ? 500 - (Date.now() - navAt) : 0;
+  if (navAt) sessionStorage.removeItem('navAt');
+  if (remain > 0) {
+    loadingTimer = setTimeout(() => setLoading(false), remain);
+    return;
+  }
+  $('#app-loading').classList.add('hidden');
 }
 function showWelcome() {
   $('#flow').classList.add('hidden'); $('#email-verification').classList.add('hidden'); $('#welcome').classList.remove('hidden'); setLoading(false);
@@ -226,5 +241,8 @@ async function reportsPage() {
 
 const nav = document.createElement('nav'); nav.className = 'header-actions'; nav.setAttribute('aria-label', '账户内容'); nav.innerHTML = '<a href="/my-resume">我的简历</a><a href="/reports">我的报告</a>'; document.querySelector('.header-inner').append(nav);
 window.onpopstate = () => enter(email, currentStep());
+// 站内整页链接：显示「正在切换页面」过渡加载层，最短停留 0.5 秒
 document.addEventListener('click', event => { const link = event.target.closest('a[href^="/"]'); if (link && !event.defaultPrevented && !event.ctrlKey && !event.metaKey) setLoading(true, '正在切换页面', '正在为你准备下一步'); });
+// bfcache 恢复（浏览器回退）时兜底清除加载层，避免残留卡死
+window.addEventListener('pageshow', event => { if (event.persisted) setLoading(false); });
 verifyEmailPage().then(async isVerification => { if (isVerification) return; if (await resumePage()) return; const isList = await reportsPage(); if (isList) { setLoading(false); return; } if (await shared()) return; const session = await fetch('/api/session').then(response => response.json()).catch(() => ({ authenticated: false })); if (!session.authenticated) return showWelcome(); if (session.authenticated) { if (!session.user.emailVerified) return showVerification(session.user.email); let d = draft(); const stored = await fetch('/api/resume').then(response => response.json()).catch(() => ({ hasResume: false })); if (stored.hasResume) { saveDraft({ resumeText: stored.text, facts: d.facts || stored.text }); d = draft(); } else if (d.resumeText) { await persistResume(d.resumeText).catch(() => {}); } let step = currentStep(); if (step === 'resume' && d.resumeText && !replacingResume()) step = 'facts'; if (step === 'facts' && !d.resumeText) step = 'resume'; if (step === 'job' && !d.facts) step = 'facts'; if (step === 'report' && !d.report) step = d.resumeText ? 'facts' : 'resume'; enter(session.user.email, step); } }).catch(() => showWelcome());
