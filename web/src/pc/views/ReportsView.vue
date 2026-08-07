@@ -3,14 +3,18 @@
     <div class="list-head">
       <div><p class="section-kicker">MY_REPORTS</p><h1>我的分析报告</h1></div>
       <div class="list-tools">
-        <label for="report-filter">状态</label>
-        <select id="report-filter" v-model="filter">
-          <option value="all">全部状态</option>
-          <option value="completed">已完成</option>
-          <option value="analyzing">分析中</option>
-          <option value="failed">失败</option>
-        </select>
-        <router-link class="neo-button neo-button-primary" to="/facts">分析新岗位</router-link>
+        <div class="filter-group">
+          <label for="report-filter">状态筛选</label>
+          <select id="report-filter" v-model="filter">
+            <option value="all">全部状态</option>
+            <option value="completed">已完成</option>
+            <option value="analyzing">分析中</option>
+            <option value="failed">失败</option>
+          </select>
+        </div>
+        <button id="new-analysis" class="neo-button neo-button-primary" type="button" :disabled="starting" @click="startNewAnalysis">
+          {{ starting ? '正在确认…' : '分析新岗位' }}
+        </button>
       </div>
     </div>
     <div id="report-list" class="report-list">
@@ -20,7 +24,7 @@
         <strong>{{ filtered ? '没有符合条件的报告' : '还没有报告' }}</strong>
         <p>{{ filtered ? '换一个状态筛选，或开始新的岗位分析。' : '确认简历事实并提交目标岗位后，报告会保存在这里。' }}</p>
         <router-link v-if="filtered" to="/reports">查看全部报告</router-link>
-        <router-link v-else to="/facts">开始第一次分析</router-link>
+        <router-link v-else to="/resume" @click.prevent="startNewAnalysis">开始第一次分析</router-link>
       </div>
       <template v-else>
         <router-link v-for="item in rows" :key="item.id" class="report-row" :to="rowTarget(item)">
@@ -35,13 +39,16 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { api } from '../api'
-import { showLoading, hideLoading } from '../store'
+import { store, showLoading, hideLoading, saveDraft } from '../store'
 
+const router = useRouter()
 const filter = ref('all')
 const reports = ref([])
 const loading = ref(true)
 const loadError = ref('')
+const starting = ref(false)
 
 const statusLabel = { completed: '已完成', analyzing: '分析中', failed: '失败' }
 const mailLabel = { sent: '已发送', pending: '待发送', failed: '发送失败', not_configured: '未配置', unknown: '未知' }
@@ -51,6 +58,27 @@ const rows = computed(() => {
   if (!filtered.value) return reports.value
   return reports.value.filter(item => item.status === filter.value)
 })
+
+async function startNewAnalysis() {
+  if (starting.value) return
+  starting.value = true
+  showLoading('正在切换页面', '正在确认你的简历状态')
+  try {
+    const data = await api.get('/api/resume')
+    if (data.hasResume) {
+      // 有简历：把后端简历恢复到前端草稿，进入岗位分析流程（事实确认 → 目标岗位）
+      if (!store.draft.resumeText) saveDraft({ resumeText: data.text || '', facts: undefined, report: undefined })
+      router.push('/facts')
+    } else {
+      // 无简历 → 上传简历流程
+      router.push('/resume')
+    }
+  } catch {
+    router.push('/resume')
+  } finally {
+    starting.value = false
+  }
+}
 
 function rowTarget(item) {
   const token = item.reportUrl ? String(item.reportUrl).split('/').pop() : ''

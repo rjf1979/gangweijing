@@ -17,6 +17,12 @@
       <button id="auth-switch" class="text-button" type="button" @click="toggleMode">
         {{ loginMode ? '没有账号？注册' : '已有账号？登录' }}
       </button>
+      <div class="auth-disclaimer" role="note" aria-label="使用须知">
+        <strong>使用须知</strong>
+        <p>每位用户可免费进行 3 次岗位分析，结果全程由 AI 生成，仅供求职参考，不构成任何官方结论。</p>
+        <p>本工具基于 gpt-5.6 或 deepseek v4 大模型，系统会根据实际情况自动切换。大模型存在成本开销，后续可能推出收费服务。</p>
+        <p>本站仅提供工具参考，并非权威官方或组织，所有内容最终解释权归本站所有。</p>
+      </div>
     </form>
   </section>
 </template>
