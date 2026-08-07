@@ -12,6 +12,7 @@ GITHUB_DEPLOY_KEY.pub
 uploads/
 *.log
 logs/
+*.local
 
 # Dependencies and build output
 node_modules/
@@ -27,8 +28,11 @@ coverage/
 .agents/
 .vscode/
 .idea/
-*.swp
-*.swo
+*.sw?
+*.sln
+*.suo
+*.ntvs*
+*.njsproj
 
 # Operating system files
 .DS_Store

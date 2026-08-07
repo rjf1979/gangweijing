@@ -2,14 +2,14 @@
 
 独立管理后台项目，用于运营岗位镜（candidate-fit-tool）的业务数据：用户、分析报告、站点设置与管理员账号。
 
-- 后端：Node.js + Express 5 + PostgreSQL（`admin/server`）
-- 前端：Vue 3 + Vite（`admin/web`），桌面端 PC 后台，独立设计，不依赖主站前端
+- 后端：Node.js + Express 5 + PostgreSQL（`src/admin/server`）
+- 前端：Vue 3 + Vite（`src/admin/web`），桌面端 PC 后台，独立设计，不依赖主站前端
 - 数据：与主项目共用同一 PostgreSQL 数据库（`app_users` / `app_sessions` / `app_reports`），管理员体系独立（`admin_users` / `admin_sessions` / `admin_settings`）
 
 ## 目录结构
 
 ```
-admin/
+src/admin/
 ├── server/          # 后端：认证、统计、用户/报告管理、设置 API，托管前端构建产物
 │   └── .env.example # 环境变量示例
 └── web/             # 前端：Vue3 + Vite
@@ -21,7 +21,7 @@ admin/
 ### 1. 后端
 
 ```bash
-cd admin/server
+cd src/admin/server
 cp .env.example .env   # 填入数据库连接与初始管理员账号
 npm install
 npm run dev            # http://127.0.0.1:3216
@@ -32,13 +32,13 @@ npm run dev            # http://127.0.0.1:3216
 ### 2. 前端
 
 ```bash
-cd admin/web
+cd src/admin/web
 npm install
 npm run dev            # 开发模式，代理 /api 到 127.0.0.1:3216
-npm run build          # 构建产物输出到 admin/web/dist
+npm run build          # 构建产物输出到 src/admin/web/dist
 ```
 
-生产部署时，将 `admin/web/dist` 拷贝到 `admin/server/dist`（或直接构建到该目录），后端自动托管。
+生产部署时，将 `src/admin/web/dist` 拷贝到 `src/admin/server/dist`（或直接构建到该目录），后端自动托管。
 
 ## 功能模块
 
