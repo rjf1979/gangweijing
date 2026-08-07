@@ -228,7 +228,7 @@ main { width: 100%; }
 .auth-panel { padding: clamp(24px, 4vw, 38px); }
 .verification-layout { max-width: 760px; }
 .verification-panel { padding: clamp(28px, 6vw, 52px); }
-.verification-panel h1 { margin: var(--space-4) 0 0; font-size: clamp(30px, 5vw, 46px); line-height: 1.15; }
+.verification-panel h1 { margin: var(--space-4) 0 0; font-size: clamp(30px, 5vw, 46px); line-height: 1.4; }
 
 .panel-heading {
   display: grid;
@@ -240,7 +240,7 @@ main { width: 100%; }
 .panel-heading h2, .list-head h1, .resume-toolbar h1 {
   margin: 0;
   font-size: clamp(26px, 4vw, 36px);
-  line-height: 1.2;
+  line-height: 1.4;
 }
 .panel-heading p:not(.section-kicker) { margin: var(--space-2) 0 0; color: var(--color-muted); }
 
@@ -478,7 +478,7 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
 .action-row-end { justify-content: flex-end; }
 
 .report-heading { padding-bottom: var(--space-6); }
-.report-heading h2 { margin: var(--space-4) 0 0; font-size: clamp(30px, 5vw, 46px); line-height: 1.18; }
+.report-heading h2 { margin: var(--space-4) 0 0; font-size: clamp(30px, 5vw, 46px); line-height: 1.4; }
 .summary { max-width: 72ch; margin: var(--space-4) 0 0; color: var(--color-ink); font-size: 18px; font-weight: 650; }
 .report-disclaimer { margin: var(--space-3) 0 0; color: var(--color-muted); font-size: 14px; }
 
