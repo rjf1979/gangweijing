@@ -42,6 +42,100 @@
         </form>
       </section>
 
+      <!-- AI 分析配置 -->
+      <section class="card">
+        <div class="card-head">
+          <h2 class="card-title">AI 分析配置</h2>
+          <span class="badge" :class="settings?.openai_api_key_masked || environment.openaiEnvConfigured ? 'badge-success' : 'badge-neutral'">
+            {{ settings?.openai_api_key_masked || environment.openaiEnvConfigured ? '已配置' : '未配置' }}
+          </span>
+        </div>
+        <form class="card-body settings-form" novalidate @submit.prevent="saveAiConfig">
+          <div class="form-grid">
+            <div class="field">
+              <label class="field-label" for="ai-api-key">API Key</label>
+              <input
+                id="ai-api-key"
+                v-model.trim="aiForm.apiKey"
+                class="input"
+                type="password"
+                autocomplete="new-password"
+                :placeholder="aiForm.apiKeyPlaceholder || 'sk-…（留空表示不修改）'"
+              />
+              <p class="field-hint">留空表示不修改；已保存的密钥仅以掩码显示，不会回传明文。</p>
+            </div>
+            <div class="field">
+              <label class="field-label" for="ai-base-url">Base URL</label>
+              <input id="ai-base-url" v-model.trim="aiForm.baseUrl" class="input" placeholder="https://api.openai.com/v1" />
+              <p class="field-hint">留空则使用环境变量或默认地址，保存后即时生效。</p>
+            </div>
+            <div class="field">
+              <label class="field-label" for="ai-model">对话模型</label>
+              <input id="ai-model" v-model.trim="aiForm.model" class="input" placeholder="gpt-4o" />
+              <p class="field-hint">用于简历内容分析，留空则使用环境变量或默认模型。</p>
+            </div>
+            <div class="field">
+              <label class="field-label" for="ai-vision-model">视觉模型</label>
+              <input id="ai-vision-model" v-model.trim="aiForm.visionModel" class="input" placeholder="gpt-4o-mini" />
+              <p class="field-hint">用于简历截图 OCR 识别，留空则回退到对话模型。</p>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-label" id="ai-clear-label">清除已保存的 API Key</span>
+            <label class="switch" for="ai-clear-toggle">
+              <input id="ai-clear-toggle" v-model="aiForm.clearKey" type="checkbox" aria-labelledby="ai-clear-label" />
+              <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+              <span class="switch-text">{{ aiForm.clearKey ? '保存后清除' : '保留密钥' }}</span>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-primary" type="submit" :disabled="savingAi">{{ savingAi ? '保存中…' : '保存 AI 配置' }}</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- 邮件配置（Resend） -->
+      <section class="card">
+        <div class="card-head">
+          <h2 class="card-title">邮件配置（Resend）</h2>
+          <span class="badge" :class="settings?.resend_api_key_masked || environment.emailEnvConfigured ? 'badge-success' : 'badge-neutral'">
+            {{ settings?.resend_api_key_masked || environment.emailEnvConfigured ? '已配置' : '未配置' }}
+          </span>
+        </div>
+        <form class="card-body settings-form" novalidate @submit.prevent="saveEmailConfig">
+          <div class="form-grid">
+            <div class="field">
+              <label class="field-label" for="email-api-key">Resend API Key</label>
+              <input
+                id="email-api-key"
+                v-model.trim="emailForm.apiKey"
+                class="input"
+                type="password"
+                autocomplete="new-password"
+                placeholder="re_…（留空表示不修改）"
+              />
+              <p class="field-hint">留空表示不修改；已保存的密钥仅以掩码显示，不会回传明文。</p>
+            </div>
+            <div class="field">
+              <label class="field-label" for="email-from">发件人地址</label>
+              <input id="email-from" v-model.trim="emailForm.emailFrom" class="input" type="email" placeholder="noreply@example.com" />
+              <p class="field-hint">需为 Resend 已验证域名下的地址，保存后即时生效。</p>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-label" id="email-clear-label">清除已保存的 API Key</span>
+            <label class="switch" for="email-clear-toggle">
+              <input id="email-clear-toggle" v-model="emailForm.clearKey" type="checkbox" aria-labelledby="email-clear-label" />
+              <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+              <span class="switch-text">{{ emailForm.clearKey ? '保存后清除' : '保留密钥' }}</span>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-primary" type="submit" :disabled="savingEmail">{{ savingEmail ? '保存中…' : '保存邮件配置' }}</button>
+          </div>
+        </form>
+      </section>
+
       <section class="grid-2">
         <!-- 环境服务状态 -->
         <article class="card">
@@ -50,15 +144,27 @@
           </div>
           <div class="card-body env-list">
             <div class="env-row">
-              <span class="env-name">AI 分析接口</span>
-              <span class="badge" :class="environment.openaiConfigured ? 'badge-success' : 'badge-danger'">
-                {{ environment.openaiConfigured ? '已配置' : '未配置' }}
+              <span class="env-name">AI 密钥（数据库）</span>
+              <span class="badge" :class="settings?.openai_api_key_masked ? 'badge-success' : 'badge-neutral'">
+                {{ settings?.openai_api_key_masked ? '已配置' : '未配置' }}
               </span>
             </div>
             <div class="env-row">
-              <span class="env-name">邮件服务</span>
-              <span class="badge" :class="environment.emailConfigured ? 'badge-success' : 'badge-danger'">
-                {{ environment.emailConfigured ? '已配置' : '未配置' }}
+              <span class="env-name">AI 密钥（环境变量兜底）</span>
+              <span class="badge" :class="environment.openaiEnvConfigured ? 'badge-success' : 'badge-neutral'">
+                {{ environment.openaiEnvConfigured ? '已配置' : '未配置' }}
+              </span>
+            </div>
+            <div class="env-row">
+              <span class="env-name">邮件密钥（数据库）</span>
+              <span class="badge" :class="settings?.resend_api_key_masked ? 'badge-success' : 'badge-neutral'">
+                {{ settings?.resend_api_key_masked ? '已配置' : '未配置' }}
+              </span>
+            </div>
+            <div class="env-row">
+              <span class="env-name">邮件密钥（环境变量兜底）</span>
+              <span class="badge" :class="environment.emailEnvConfigured ? 'badge-success' : 'badge-neutral'">
+                {{ environment.emailEnvConfigured ? '已配置' : '未配置' }}
               </span>
             </div>
             <div class="env-row">
@@ -69,7 +175,7 @@
               <span class="env-name">API 地址</span>
               <span class="env-value">{{ environment.baseUrl || '—' }}</span>
             </div>
-            <p class="field-hint env-hint">以上来自主服务环境变量，仅展示配置状态，不存储密钥。修改需在部署环境调整后重启服务。</p>
+            <p class="field-hint env-hint">后台保存的配置优先，环境变量作为兜底；密钥仅以掩码展示，保存后即时生效。</p>
           </div>
         </article>
 
@@ -187,6 +293,8 @@ const settings = ref(null)
 const admins = ref([])
 const environment = ref({})
 const savingSite = ref(false)
+const savingAi = ref(false)
+const savingEmail = ref(false)
 const passwordBusy = ref(false)
 const addOpen = ref(false)
 const addBusy = ref(false)
@@ -197,6 +305,8 @@ const deletingAdmin = ref(false)
 const form = reactive({ siteName: '', announcement: '', freeQuota: 3, registrationEnabled: true })
 const passwordForm = reactive({ oldPassword: '', newPassword: '' })
 const addForm = reactive({ email: '', password: '' })
+const aiForm = reactive({ apiKey: '', apiKeyPlaceholder: '', baseUrl: '', model: '', visionModel: '', clearKey: false })
+const emailForm = reactive({ apiKey: '', emailFrom: '', clearKey: false })
 
 const meId = computed(() => store.admin?.id)
 
@@ -222,6 +332,7 @@ async function load() {
       form.freeQuota = data.settings.free_quota ?? 3
       form.registrationEnabled = Boolean(data.settings.registration_enabled)
     }
+    applySettings(data.settings)
   } catch (err) {
     error.value = err.message || '加载设置失败。'
   } finally {
@@ -232,18 +343,74 @@ async function load() {
 async function saveSite() {
   savingSite.value = true
   try {
-    const result = await api.put('/settings', {
+    await api.put('/settings', {
       siteName: form.siteName,
       announcement: form.announcement,
       freeQuota: form.freeQuota,
       registrationEnabled: form.registrationEnabled,
     })
     toast('站点设置已保存', 'success')
-    settings.value = result.settings
+    await reloadSettingsState()
   } catch (err) {
     toast(err.message || '保存失败', 'error')
   } finally {
     savingSite.value = false
+  }
+}
+
+function applySettings(s) {
+  if (!s) return
+  aiForm.apiKey = ''
+  aiForm.apiKeyPlaceholder = s.openai_api_key_masked || ''
+  aiForm.baseUrl = s.openai_base_url || ''
+  aiForm.model = s.openai_model || ''
+  aiForm.visionModel = s.openai_vision_model || ''
+  aiForm.clearKey = false
+  emailForm.apiKey = ''
+  emailForm.emailFrom = s.email_from || ''
+  emailForm.clearKey = false
+}
+
+async function reloadSettingsState() {
+  const data = await api.get('/settings')
+  settings.value = data.settings
+  environment.value = data.environment
+  applySettings(data.settings)
+}
+
+async function saveAiConfig() {
+  savingAi.value = true
+  try {
+    await api.put('/settings', {
+      aiApiKey: aiForm.apiKey,
+      aiBaseUrl: aiForm.baseUrl,
+      aiModel: aiForm.model,
+      aiVisionModel: aiForm.visionModel,
+      clearAiKey: aiForm.clearKey,
+    })
+    toast('AI 配置已保存', 'success')
+    await reloadSettingsState()
+  } catch (err) {
+    toast(err.message || '保存失败', 'error')
+  } finally {
+    savingAi.value = false
+  }
+}
+
+async function saveEmailConfig() {
+  savingEmail.value = true
+  try {
+    await api.put('/settings', {
+      resendApiKey: emailForm.apiKey,
+      emailFrom: emailForm.emailFrom,
+      clearResendKey: emailForm.clearKey,
+    })
+    toast('邮件配置已保存', 'success')
+    await reloadSettingsState()
+  } catch (err) {
+    toast(err.message || '保存失败', 'error')
+  } finally {
+    savingEmail.value = false
   }
 }
 

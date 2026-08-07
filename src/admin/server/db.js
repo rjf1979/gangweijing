@@ -25,11 +25,23 @@ CREATE TABLE IF NOT EXISTS admin_settings (
   announcement text NOT NULL DEFAULT '',
   free_quota integer NOT NULL DEFAULT 3,
   registration_enabled boolean NOT NULL DEFAULT true,
+  openai_api_key text,
+  openai_base_url text,
+  openai_model text,
+  openai_vision_model text,
+  resend_api_key text,
+  email_from text,
   updated_at timestamptz NOT NULL
 );
 INSERT INTO admin_settings (id, site_name, updated_at)
 VALUES (1, '岗位镜管理后台', now())
 ON CONFLICT (id) DO NOTHING;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_api_key text;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_base_url text;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_model text;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_vision_model text;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS resend_api_key text;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS email_from text;
 -- 自愈：历史编码问题可能导致默认站点名被写成问号/空，启动时自动重置为默认值（不覆盖用户后期修改）
 UPDATE admin_settings
 SET site_name = '岗位镜管理后台', announcement = '', updated_at = now()
@@ -98,14 +110,25 @@ export function createPgStore() {
 
     // ===== 站点设置 =====
     async getSettings() {
-      const { rows } = await pool.query('SELECT site_name, announcement, free_quota, registration_enabled, updated_at FROM admin_settings WHERE id = 1');
+      const { rows } = await pool.query('SELECT site_name, announcement, free_quota, registration_enabled, openai_api_key, openai_base_url, openai_model, openai_vision_model, resend_api_key, email_from, updated_at FROM admin_settings WHERE id = 1');
       return rows[0] || null;
     },
-    async updateSettings({ siteName, announcement, freeQuota, registrationEnabled }) {
-      await pool.query(
-        'UPDATE admin_settings SET site_name = $1, announcement = $2, free_quota = $3, registration_enabled = $4, updated_at = now() WHERE id = 1',
-        [siteName, announcement, freeQuota, Boolean(registrationEnabled)]
-      );
+    async updateSettings(patch = {}) {
+      const fields = [];
+      const values = [];
+      const push = (col, val) => { fields.push(col + ' = $' + (fields.length + 1)); values.push(val); };
+      if ('siteName' in patch) push('site_name', patch.siteName);
+      if ('announcement' in patch) push('announcement', patch.announcement);
+      if ('freeQuota' in patch) push('free_quota', patch.freeQuota);
+      if ('registrationEnabled' in patch) push('registration_enabled', Boolean(patch.registrationEnabled));
+      if ('openaiApiKey' in patch) push('openai_api_key', patch.openaiApiKey || null);
+      if ('openaiBaseUrl' in patch) push('openai_base_url', patch.openaiBaseUrl || null);
+      if ('openaiModel' in patch) push('openai_model', patch.openaiModel || null);
+      if ('openaiVisionModel' in patch) push('openai_vision_model', patch.openaiVisionModel || null);
+      if ('resendApiKey' in patch) push('resend_api_key', patch.resendApiKey || null);
+      if ('emailFrom' in patch) push('email_from', patch.emailFrom || null);
+      if (!fields.length) return;
+      await pool.query('UPDATE admin_settings SET ' + fields.join(', ') + ', updated_at = now() WHERE id = 1', values);
     },
 
     // ===== 统计 =====

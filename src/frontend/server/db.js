@@ -47,6 +47,29 @@ CREATE TABLE IF NOT EXISTS app_reports (
   updated_at timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS app_reports_user_id_idx ON app_reports(user_id);
+CREATE TABLE IF NOT EXISTS admin_settings (
+  id integer PRIMARY KEY DEFAULT 1,
+  site_name text NOT NULL DEFAULT '岗位镜管理后台',
+  announcement text NOT NULL DEFAULT '',
+  free_quota integer NOT NULL DEFAULT 3,
+  registration_enabled boolean NOT NULL DEFAULT true,
+  openai_api_key text,
+  openai_base_url text,
+  openai_model text,
+  openai_vision_model text,
+  resend_api_key text,
+  email_from text,
+  updated_at timestamptz NOT NULL
+);
+INSERT INTO admin_settings (id, site_name, updated_at)
+VALUES (1, '岗位镜管理后台', now())
+ON CONFLICT (id) DO NOTHING;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_api_key text;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_base_url text;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_model text;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_vision_model text;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS resend_api_key text;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS email_from text;
 `;
 
 function selectedUrl() {
@@ -84,6 +107,10 @@ export function createPgStore() {
         for (const report of db.reports || []) await client.query(`INSERT INTO app_reports (id,access_token,user_id,email,company_short_name,job_title,report_name,status,email_status,report,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (id) DO UPDATE SET access_token=$2,user_id=$3,email=$4,company_short_name=$5,job_title=$6,email_status=$9,updated_at=$12,report=$10,report_name=$7`, [report.id,report.accessToken,report.userId||null,report.email||null,report.companyShortName||null,report.jobTitle||null,report.reportName||null,report.status||'completed',report.emailStatus||'unknown',JSON.stringify(report.report||{}),report.createdAt,report.updatedAt]);
         await client.query('COMMIT');
       } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+    },
+    async getAppSettings() {
+      const { rows } = await pool.query('SELECT site_name, openai_api_key, openai_base_url, openai_model, openai_vision_model, resend_api_key, email_from FROM admin_settings WHERE id = 1');
+      return rows[0] || null;
     }
   };
 }

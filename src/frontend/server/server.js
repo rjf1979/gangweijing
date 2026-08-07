@@ -1,4 +1,4 @@
-﻿import crypto from 'node:crypto';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
@@ -22,6 +22,22 @@ const dbStore = createPgStore();
 await dbStore.init();
 const readDb = () => dbStore.readDb();
 const saveDb = db => dbStore.saveDb(db);
+// 后台配置（admin_settings 数据库）：优先于环境变量兜底，保存后立即生效
+const appConfig = { openaiApiKey: '', openaiBaseUrl: '', openaiModel: '', openaiVisionModel: '', resendApiKey: '', emailFrom: '' };
+await refreshAppConfig();
+async function refreshAppConfig() {
+  try {
+    const row = await dbStore.getAppSettings();
+    if (row) {
+      appConfig.openaiApiKey = row.openai_api_key || '';
+      appConfig.openaiBaseUrl = (row.openai_base_url || '').replace(/\/+$/, '');
+      appConfig.openaiModel = row.openai_model || '';
+      appConfig.openaiVisionModel = row.openai_vision_model || '';
+      appConfig.resendApiKey = row.resend_api_key || '';
+      appConfig.emailFrom = row.email_from || '';
+    }
+  } catch (error) { console.error('读取后台 AI/邮件配置失败：', error.message); }
+}
 const sessionCookie = (token, maxAge = 60 * 60 * 24 * 30) => `jm_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
 function currentSession(req, db) { const cookie = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('jm_session='))?.split('=')[1] || ''; const token = (req.headers['x-session-token'] || cookie); return db.sessions?.find(x => x.token === token && new Date(x.expiresAt) > new Date()); }
 function currentUser(req, db) { const session = currentSession(req, db); return session && db.users.find(user => user.id === session.userId); }
@@ -34,9 +50,9 @@ const normalizeResumeFileName = name => {
   if (decoded !== name && !decoded.includes('\uFFFD') && /[\u4e00-\u9fff]/.test(decoded)) return decoded;
   return name;
 };
-const aiBaseUrl = () => (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+const aiBaseUrl = () => (appConfig.openaiBaseUrl || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
 const outputText = payload => payload.output_text || payload.output?.flatMap(item => item.content || []).find(item => item.type === 'output_text')?.text || '';
-async function callResponses(body) { const response = await fetch(`${aiBaseUrl()}/responses`, { method: 'POST', headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(`GPT 接口返回 ${response.status}`); return response.json(); }
+async function callResponses(body) { await refreshAppConfig(); const response = await fetch(`${aiBaseUrl()}/responses`, { method: 'POST', headers: { Authorization: `Bearer ${appConfig.openaiApiKey || process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(`GPT 接口返回 ${response.status}`); return response.json(); }
 const escapeHtml = value => String(value || '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const cleanReportPart = (value, fallback) => String(value || fallback).trim().replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '-').slice(0, 40) || fallback;
 function reportName(createdAt, companyShortName, jobTitle) {
@@ -57,8 +73,11 @@ function issueVerification(user) {
   return token;
 }
 async function sendEmail(message) {
-  if (!process.env.RESEND_API_KEY || !process.env.EMAIL_FROM) throw new Error('邮件服务尚未配置。');
-  const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: process.env.EMAIL_FROM, ...message }) });
+  await refreshAppConfig();
+  const resendKey = appConfig.resendApiKey || process.env.RESEND_API_KEY;
+  const from = appConfig.emailFrom || process.env.EMAIL_FROM;
+  if (!resendKey || !from) throw new Error('邮件服务尚未配置。');
+  const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from, ...message }) });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.message || `邮件发送失败：${response.status}`);
   return result.id || null;
@@ -163,20 +182,20 @@ app.post('/api/extract/resume', upload.single('resume'), async (req, res) => {
     res.status(400).json({ error: error.message });
   }
 });
-app.post('/api/extract/screenshot', upload.single('screenshot'), async (req, res) => { try { if (!req.file?.mimetype.startsWith('image/')) return res.status(400).json({ error: '请上传有效的岗位截图。' }); if (!process.env.OPENAI_API_KEY) return res.status(503).json({ error: '尚未配置 AI 接口。' }); const image = `data:${req.file.mimetype};base64,${(await fs.readFile(req.file.path)).toString('base64')}`; const prompt = '识别这张招聘岗位截图。完整保留职责、要求、薪资、地点、公司和岗位名称，不要补充图片中不存在的信息。输出严格 JSON：{"company_short_name":"","job_title":"","text":"","warnings":[]}。公司简称应去掉有限公司等工商后缀；无法确认的内容留空并放入 warnings。'; const payload = await callResponses({ model: process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: image }] }], text: { format: { type: 'json_object' } } }); const result = JSON.parse(outputText(payload) || '{}'); res.json({ text: result.text || '', companyShortName: result.company_short_name || '', jobTitle: result.job_title || '', warnings: result.warnings || [] }); } catch (error) { res.status(502).json({ error: `AI 截图识别失败：${error.message}` }); } finally { if (req.file?.path) await fs.unlink(req.file.path).catch(() => {}); } });
+app.post('/api/extract/screenshot', upload.single('screenshot'), async (req, res) => { try { if (!req.file?.mimetype.startsWith('image/')) return res.status(400).json({ error: '请上传有效的岗位截图。' }); await refreshAppConfig(); if (!(appConfig.openaiApiKey || process.env.OPENAI_API_KEY)) return res.status(503).json({ error: '尚未配置 AI 接口。' }); const image = `data:${req.file.mimetype};base64,${(await fs.readFile(req.file.path)).toString('base64')}`; const prompt = '识别这张招聘岗位截图。完整保留职责、要求、薪资、地点、公司和岗位名称，不要补充图片中不存在的信息。输出严格 JSON：{"company_short_name":"","job_title":"","text":"","warnings":[]}。公司简称应去掉有限公司等工商后缀；无法确认的内容留空并放入 warnings。'; const payload = await callResponses({ model: appConfig.openaiVisionModel || process.env.OPENAI_VISION_MODEL || appConfig.openaiModel || process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: image }] }], text: { format: { type: 'json_object' } } }); const result = JSON.parse(outputText(payload) || '{}'); res.json({ text: result.text || '', companyShortName: result.company_short_name || '', jobTitle: result.job_title || '', warnings: result.warnings || [] }); } catch (error) { res.status(502).json({ error: `AI 截图识别失败：${error.message}` }); } finally { if (req.file?.path) await fs.unlink(req.file.path).catch(() => {}); } });
 app.post('/api/analyze', async (req, res) => {
-  if (!process.env.OPENAI_API_KEY) return res.status(503).json({ error: '尚未配置 OPENAI_API_KEY，不能生成真实 AI 报告。' });
+  await refreshAppConfig(); if (!(appConfig.openaiApiKey || process.env.OPENAI_API_KEY)) return res.status(503).json({ error: '尚未配置 OPENAI_API_KEY，不能生成真实 AI 报告。' });
   const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录后生成报告。' });
   if (!user.emailVerifiedAt) return res.status(403).json({ error: '请先验证注册邮箱，再生成分析报告。', code: 'EMAIL_NOT_VERIFIED' });
   const { resumeText, jobText, jobTitle, companyShortName } = req.body; const email = user.email;
   if (!resumeText || !jobText) return res.status(400).json({ error: '请先提供简历文本和岗位内容。' });
   const prompt = `你是严谨的中文职业顾问。只依据给出的简历与岗位内容分析，不能承诺 offer 或虚构经历。输出严格 JSON：{company_short_name,job_title,summary, qualification:{status,evidence,risks}, dimensions:[{name,score_0_to_5,evidence,gap}], verify:[string], resume_rewrite:[{section,original_issue,rewrite_direction,example}], actions:[string]}。company_short_name 去掉有限公司等工商后缀。公司简称：${companyShortName || '请从岗位正文识别'}\n岗位名称：${jobTitle || '请从岗位正文识别'}\n岗位内容：${jobText}\n简历：${resumeText}`;
   try {
-    const payload = await callResponses({ model: process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } });
+    const payload = await callResponses({ model: appConfig.openaiModel || process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } });
     const report = JSON.parse(outputText(payload) || '{}');
     const createdAt = new Date().toISOString(); const finalCompany = companyShortName || report.company_short_name || ''; const finalJobTitle = jobTitle || report.job_title || ''; const accessToken = crypto.randomBytes(24).toString('base64url'); const record = { id: crypto.randomUUID(), accessToken, userId: user.id, email, companyShortName: finalCompany, jobTitle: finalJobTitle, reportName: reportName(createdAt, finalCompany, finalJobTitle), status: 'completed', emailStatus: 'pending', report, createdAt, updatedAt: createdAt }; db.reports.push(record); await saveDb(db);
     const reportUrl = `${publicAppUrl()}/report/${accessToken}`;
-    let emailSent = false; try { await sendReportEmail(email, reportUrl, report); emailSent = Boolean(email && process.env.RESEND_API_KEY && process.env.EMAIL_FROM); record.emailStatus = emailSent ? 'sent' : 'not_configured'; } catch (emailError) { record.emailStatus = 'failed'; console.error(emailError.message); } record.updatedAt = new Date().toISOString(); await saveDb(db);
+    let emailSent = false; try { await sendReportEmail(email, reportUrl, report); emailSent = Boolean(email && (appConfig.resendApiKey || process.env.RESEND_API_KEY) && (appConfig.emailFrom || process.env.EMAIL_FROM)); record.emailStatus = emailSent ? 'sent' : 'not_configured'; } catch (emailError) { record.emailStatus = 'failed'; console.error(emailError.message); } record.updatedAt = new Date().toISOString(); await saveDb(db);
     res.json({ id: record.id, reportName: record.reportName, reportUrl, emailSent, report });
   } catch (error) { res.status(502).json({ error: `AI 分析失败：${error.message}` }); }
 });

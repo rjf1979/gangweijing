@@ -46,6 +46,9 @@ npm run build          # 构建产物输出到 src/admin/web/dist
 - 用户管理：搜索、查看详情（简历与报告）、原始简历文件维护（预览 / 下载 / 删除）、删除用户（级联清理其简历文件目录）
 - 报告管理：搜索与状态筛选、查看报告内容、删除报告
 - 系统设置：站点基础设置、管理员账号管理、改密码、环境服务状态查看
+- AI 分析配置：在后台直接维护 OpenAI 兼容接口的 API Key / Base URL / 对话模型 / 视觉模型，保存后主服务即时生效（主服务未配置时使用环境变量兜底）
+- 邮件配置（Resend）：在后台直接维护 Resend API Key 与发件人地址，用于发送分析报告邮件，保存后主服务即时生效（环境变量兜底）
+- 密钥安全：密钥写入数据库后永不回传明文，仅以掩码展示；留空不修改，显式勾选「清除」才会清空
 
 ## 环境变量
 
@@ -57,4 +60,4 @@ npm run build          # 构建产物输出到 src/admin/web/dist
 | `APP_URL_MODE` | 数据库选择模式：local / server |
 | `ADMIN_INIT_EMAIL` / `ADMIN_INIT_PASSWORD` | 初始管理员账号（仅空表时创建） |
 | `FRONTEND_DATA_DIR` | 用户端简历原文件目录（相对 src/admin/server 解析，默认 `../../frontend/server/.runtime`；部署时用户端 .runtime 不在默认位置才需要设置） |
-| `OPENAI_*` / `RESEND_*` / `EMAIL_FROM` | 仅用于只读展示服务配置状态，不存储密钥 |
+| `OPENAI_*` / `RESEND_*` / `EMAIL_FROM` | 主服务环境变量，作为 AI / 邮件配置的兜底；后台数据库配置优先 |

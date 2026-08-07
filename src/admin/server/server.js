@@ -1,4 +1,4 @@
-﻿import crypto from 'node:crypto';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
@@ -89,6 +89,12 @@ const parsePage = value => {
   return { page, pageSize, offset: (page - 1) * pageSize };
 };
 const iso = value => value && new Date(value).toISOString();
+const maskSecret = value => {
+  if (!value) return null;
+  const s = String(value);
+  return s.length <= 8 ? '••••••••' : '••••••••' + s.slice(-4);
+};
+const isMasked = value => typeof value === 'string' && /[•*]/.test(value);
 
 // ===== 认证 =====
 app.post('/api/admin/login', express.json(), async (req, res) => {
@@ -256,11 +262,24 @@ app.delete('/api/admin/reports/:id', requireAdmin, async (req, res) => {
 app.get('/api/admin/settings', requireAdmin, async (req, res) => {
   const [settings, admins] = await Promise.all([store.getSettings(), store.listAdmins()]);
   res.json({
-    settings,
+    settings: settings ? {
+      site_name: settings.site_name,
+      announcement: settings.announcement,
+      free_quota: settings.free_quota,
+      registration_enabled: settings.registration_enabled,
+      openai_api_key_masked: maskSecret(settings.openai_api_key),
+      openai_base_url: settings.openai_base_url || null,
+      openai_model: settings.openai_model || null,
+      openai_vision_model: settings.openai_vision_model || null,
+      resend_api_key_masked: maskSecret(settings.resend_api_key),
+      email_from: settings.email_from || null,
+      updated_at: settings.updated_at,
+    } : null,
     admins: admins.map(publicAdmin),
     environment: {
-      openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
-      emailConfigured: Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM),
+      // 环境变量作为兜底配置，后台数据库配置优先
+      openaiEnvConfigured: Boolean(process.env.OPENAI_API_KEY),
+      emailEnvConfigured: Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM),
       model: process.env.OPENAI_MODEL || '未配置',
       baseUrl: (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, ''),
     },
@@ -273,8 +292,29 @@ app.put('/api/admin/settings', express.json(), requireAdmin, async (req, res) =>
   const freeQuota = Math.max(0, Math.min(999, parseInt(req.body?.freeQuota, 10) || 0));
   const registrationEnabled = Boolean(req.body?.registrationEnabled);
   if (!siteName) return res.status(400).json({ error: '站点名称不能为空。' });
-  await store.updateSettings({ siteName, announcement, freeQuota, registrationEnabled });
-  res.json({ ok: true, settings: { siteName, announcement, freeQuota, registrationEnabled } });
+
+  const patch = { siteName, announcement, freeQuota, registrationEnabled };
+
+  // AI 配置：留空或掩码值不覆盖已保存的密钥；显式清除才清空
+  const aiApiKey = String(req.body?.aiApiKey || '').trim();
+  if (aiApiKey && !isMasked(aiApiKey)) patch.openaiApiKey = aiApiKey;
+  if (req.body?.clearAiKey) patch.openaiApiKey = '';
+  const aiBaseUrl = String(req.body?.aiBaseUrl || '').trim().replace(/\/+$/, '');
+  const aiModel = String(req.body?.aiModel || '').trim();
+  const aiVisionModel = String(req.body?.aiVisionModel || '').trim();
+  if ('aiBaseUrl' in req.body) patch.openaiBaseUrl = aiBaseUrl || null;
+  if ('aiModel' in req.body) patch.openaiModel = aiModel || null;
+  if ('aiVisionModel' in req.body) patch.openaiVisionModel = aiVisionModel || null;
+
+  // 邮件配置（Resend）：同上
+  const resendApiKey = String(req.body?.resendApiKey || '').trim();
+  if (resendApiKey && !isMasked(resendApiKey)) patch.resendApiKey = resendApiKey;
+  if (req.body?.clearResendKey) patch.resendApiKey = '';
+  const emailFrom = String(req.body?.emailFrom || '').trim();
+  if ('emailFrom' in req.body) patch.emailFrom = emailFrom || null;
+
+  await store.updateSettings(patch);
+  res.json({ ok: true });
 });
 
 app.post('/api/admin/password', express.json(), requireAdmin, async (req, res) => {
