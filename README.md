@@ -9,6 +9,7 @@ candidate-fit-tool/
 ├── server/   # 后端 Node/Express：server.js、db.js、.env、scripts/、traineddata/
 ├── web/      # 前端 uni-app + Vue3：一套代码编译 H5 / 微信小程序 / App
 │   └── legacy/   # 旧版 Web 三件套归档（index.html / app.js / styles.css）
+├── admin/    # 独立管理后台（admin/server 后端 + admin/web 前端）
 ├── docs/     # 产品与开发文档（多端方案、UI 改造、产品流程等）
 └── .codex/   # 项目记忆（memory/）
 ```
@@ -39,6 +40,20 @@ npm run build:app         # 构建 App 资源 → dist/build/app（HBuilderX 导
 
 - 页面：首页 / 登录注册（邮箱验证）/ 上传简历 / 事实确认 / 岗位分析 / 报告列表 / 报告详情 / 我的。
 - PC 适配：全局 rpx 宽屏换算（rpxCalcMaxDeviceWidth 1920）+ 媒体查询（≥768px 内容区居中、最大宽 880px）。
+
+## 管理后台（admin/）
+
+独立管理后台项目（桌面端），用于运营用户、报告与站点设置：
+
+```bash
+cd admin/server && cp .env.example .env && npm install && npm run dev   # 端口 3216
+cd admin/web    && npm install && npm run dev                           # 开发，代理 /api → 3216
+```
+
+- 管理员体系独立（admin_users / admin_sessions / admin_settings），业务数据直查 app_* 表。
+- 功能：统计概览、用户管理、报告管理、系统设置（站点设置 / 管理员 / 改密码 / 环境状态）。
+- 部署：构建 `admin/web` 后将 dist 拷至 `admin/server/dist`，由后端统一托管。
+- 详见 `admin/README.md`。
 
 ## 文档（docs/）
 

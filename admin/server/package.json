@@ -1,0 +1,13 @@
+{
+  "name": "job-mirror-admin",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file=.env server.js",
+    "start": "node --env-file=.env server.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "pg": "^8.16.3"
+  }
+}
