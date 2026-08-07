@@ -62,10 +62,20 @@ async function sendReportEmail(email, reportUrl, report) {
 }
 app.use(express.json());
 // ===== 前端托管：uni-app H5 构建产物（多端混合演进，2026-08-07）=====
-// 旧前端（index.html/app.js/styles.css）已归档到 web/legacy/，不再托管。
+// PC 版（Vue3）源码在 web/src/pc，构建产物 web/dist/pc；老版三件套保留在 web/pc 作为参考蓝本。
 const h5Dir = path.join(root, '..', 'web', 'dist', 'build', 'h5');
+const pcDir = path.join(root, '..', 'web', 'dist', 'pc');
 const sendH5 = (req, res) => res.sendFile(path.join(h5Dir, 'index.html'));
+const sendPc = (req, res) => res.sendFile(path.join(pcDir, 'index.html'));
+const isMobileUA = ua => /Mobile|Android|iPhone|iPad|iPod|Windows Phone|IEMobile|webOS|BlackBerry|MicroMessenger/i.test(ua || '');
 const h5 = (hashPath) => (req, res) => res.redirect('/#' + hashPath);
+const pageByUA = (hashPath) => (req, res) => isMobileUA(req.headers['user-agent']) ? res.redirect('/#' + hashPath) : sendPc(req, res);
+app.use('/pc', express.static(pcDir));
+// PC 浏览器访问首页直接进入 PC 版（Vue3 复刻第一版流程），移动端保持原有 H5 逻辑
+app.use((req, res, next) => {
+  if (req.path === '/' && !isMobileUA(req.headers['user-agent'])) return sendPc(req, res);
+  return next();
+});
 app.use(express.static(h5Dir));
 app.get('/', sendH5);
 app.post('/api/register', async (req, res) => {
@@ -110,18 +120,25 @@ app.post('/api/analyze', async (req, res) => {
 app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = publicAppUrl(); const reports = db.reports.filter(item => item.userId === user.id || (!item.userId && item.email === user.email)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null })); res.json({ reports }); });
 app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, report: record.report }); });
 // 旧 URL -> uni-app H5 页面重定向（邮件链接与旧书签不失效）
-app.get('/report/:token', (req, res) => res.redirect('/#/pages/report/detail?token=' + encodeURIComponent(req.params.token)));
-app.get('/verify-email/:token', (req, res) => res.redirect('/#/pages/auth/index?verify=' + encodeURIComponent(req.params.token)));
-app.get('/resume', h5('/pages/resume/index'));
-app.get('/facts', h5('/pages/facts/index'));
-app.get('/job', h5('/pages/job/index'));
-app.get('/report', h5('/pages/report/list'));
-app.get('/reports', h5('/pages/report/list'));
-app.get('/my-resume', h5('/pages/my/index'));
-// 其它非 API/静态路径 fallback 到 H5 SPA
+app.get('/report/:token', (req, res) => {
+  if (isMobileUA(req.headers['user-agent'])) return res.redirect('/#/pages/report/detail?token=' + encodeURIComponent(req.params.token));
+  return sendPc(req, res);
+});
+app.get('/verify-email/:token', (req, res) => {
+  if (isMobileUA(req.headers['user-agent'])) return res.redirect('/#/pages/auth/index?verify=' + encodeURIComponent(req.params.token));
+  return sendPc(req, res);
+});
+app.get('/resume', pageByUA('/pages/resume/index'));
+app.get('/facts', pageByUA('/pages/facts/index'));
+app.get('/job', pageByUA('/pages/job/index'));
+app.get('/report', pageByUA('/pages/report/list'));
+app.get('/reports', pageByUA('/pages/report/list'));
+app.get('/my-resume', pageByUA('/pages/my/index'));
+// 其它非 API/静态路径 fallback：PC 浏览器回 PC SPA，移动端回 H5 SPA
 app.use((req, res, next) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/assets/')) return next();
-  return sendH5(req, res);
+  if (isMobileUA(req.headers['user-agent'])) return sendH5(req, res);
+  return sendPc(req, res);
 });
 const port = Number(process.env.PORT || 3215);
 const host = process.env.HOST || '127.0.0.1';

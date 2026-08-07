@@ -34,3 +34,6 @@ coverage/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# 简历模板参考（大体积，不入库）
+docs/references/
