@@ -63,7 +63,7 @@
               <td class="cell-secondary cell-num">{{ formatDateTime(report.created_at) }}</td>
               <td><StatusBadge :value="report.status" /></td>
               <td><StatusBadge :value="report.email_status" /></td>
-              <td>
+              <td class="cell-actions">
                 <button class="btn btn-danger btn-sm" type="button" @click.stop="askDelete(report)">
                   <AppIcon name="trash" :size="13" /> 删除
                 </button>
@@ -256,4 +256,5 @@ onMounted(load)
   .toolbar { flex-direction: column; align-items: stretch; }
   .search-form { flex-wrap: wrap; }
 }
+.cell-actions { white-space: nowrap; }
 </style>

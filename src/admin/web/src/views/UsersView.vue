@@ -51,7 +51,7 @@
                 <span v-else class="cell-muted">—</span>
               </td>
               <td class="cell-num">{{ user.report_count ?? '—' }}</td>
-              <td>
+              <td class="cell-actions">
                 <button class="btn btn-danger btn-sm" type="button" @click.stop="askDelete(user)">
                   <AppIcon name="trash" :size="14" /> 删除
                 </button>
@@ -235,4 +235,5 @@ onMounted(load)
   color: var(--color-success);
   font-size: 12.5px;
 }
+.cell-actions { white-space: nowrap; }
 </style>
