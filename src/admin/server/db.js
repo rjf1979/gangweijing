@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS admin_settings (
 INSERT INTO admin_settings (id, site_name, updated_at)
 VALUES (1, '岗位镜管理后台', now())
 ON CONFLICT (id) DO NOTHING;
+-- 自愈：历史编码问题可能导致默认站点名被写成问号/空，启动时自动重置为默认值（不覆盖用户后期修改）
+UPDATE admin_settings
+SET site_name = '岗位镜管理后台', announcement = '', updated_at = now()
+WHERE id = 1 AND (site_name IS NULL OR site_name = '' OR site_name ~ '^[?]+$');
 `;
 
 function selectedUrl() {
