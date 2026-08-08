@@ -4,6 +4,7 @@
       <text class="kicker">STEP 1 · RESUME</text>
       <text class="title">上传简历</text>
       <text class="muted">支持 PDF / Word，AI 自动提取文本；也可以直接粘贴简历内容。</text>
+      <view class="muted privacy-note">🔒 保存后自动脱敏（手机号、邮箱、证件号等），仅用于 AI 分析，保护你的隐私。</view>
 
       <button class="btn btn-blue" :disabled="busyUpload" @click="chooseFile">
         选择简历文件（PDF / Word）
@@ -175,6 +176,7 @@ export default {
 </script>
 
 <style>
+.privacy-note { margin-top: 8rpx; }
 .file-meta {
   display: flex;
   align-items: center;

@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   color-scheme: light;
   --color-bg: #f7f5ee;
   --color-ink: #111111;
@@ -644,6 +644,41 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
 .fine { color: var(--color-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .resume-document { margin-top: var(--space-5); padding: clamp(28px, 7vw, 64px); border: var(--border-strong); border-radius: var(--radius-sm); background: var(--color-surface); box-shadow: var(--shadow-hard-md); }
 .resume-document pre { max-width: 76ch; margin: 0 auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--color-ink); font: 15px/1.8 Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
+.privacy-note { margin-top: var(--space-2); }
+/* 打印/保存 PDF 前可填写复原的脱敏输入 */
+.mask-input {
+  display: inline-block;
+  min-width: 5ch;
+  max-width: 22ch;
+  margin: 0 1px;
+  padding: 0 3px;
+  border: 1px dashed var(--color-muted);
+  border-radius: 4px;
+  background: #f5f9c8;
+  background: color-mix(in srgb, var(--color-lime) 22%, white);
+  font: inherit;
+  color: inherit;
+  line-height: inherit;
+  vertical-align: baseline;
+}
+.mask-input.is-filled { border-style: solid; border-color: var(--color-ink); background: transparent; }
+.mask-input:focus { outline: 3px solid var(--color-focus); outline-offset: 1px; background: transparent; }
+/* 填写复原内容后的清空入口（仅清本机浏览器记忆） */
+.mask-clear { margin-top: var(--space-2); }
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-muted);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.link-button:hover { color: var(--color-ink); }
+
+/* 打印/保存 PDF 输出已复原的纯文本版本，避免 input 值不被浏览器打印 */
+.print-output { display: none; }
 
 .app-loading {
   position: fixed;
@@ -914,8 +949,10 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
 
 @media print {
   body { background: var(--color-surface); }
-  .site-header, .resume-toolbar .section-kicker, .resume-actions, .fine { display: none !important; }
+  .site-header, .resume-toolbar .section-kicker, .resume-actions, .fine, .mask-clear { display: none !important; }
   .resume-view { width: 100%; padding: 0; }
   .resume-document { margin: 0; padding: 0; border: 0; box-shadow: none; }
   .resume-document pre { max-width: none; color: var(--color-ink); font-size: 11pt; }
+  .resume-document pre.resume-text, .mask-tag, .mask-input { display: none !important; }
+  .print-output { display: block !important; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 }

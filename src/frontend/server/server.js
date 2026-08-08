@@ -168,6 +168,51 @@ async function structureResume(text) {
   const cost = await computeReportCost(usage);
   return { structured: parsed, usage: usage ? { ...usage, costSource: cost.source, currency: cost.currency } : null, cost, model };
 }
+// 简历隐私脱敏：保存/入库/发送 AI 前对手机号、邮箱、证件号、银行卡、微信/QQ、门牌号等敏感信息打码，尊重用户隐私
+function maskResumePII(text) {
+  if (!text) return '';
+  let s = String(text);
+  // 手机号：13812345678 / 138 1234 5678 / 138-1234-5678 -> 138****5678
+  s = s.replace(/(?<!\d)(1[3-9]\d)[\s-]?(\d{4})[\s-]?(\d{4})(?!\d)/g, '$1****$3');
+  // 座机：010-12345678 / 01012345678 -> 010-1234****
+  s = s.replace(/(?<!\d)(0\d{2,3})[\s-]?(\d{3,4})(\d{4})(?!\d)/g, '$1-$2****');
+  // 邮箱：zhangsan@example.com -> zh***@example.com（保留域名）
+  s = s.replace(/(?<![A-Za-z0-9_+-])([A-Za-z0-9_+-])([A-Za-z0-9_+.-]*?)@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)/g,
+    (match, first, rest, domain) => `${first}${'*'.repeat(Math.max(1, Math.min(rest.length, 3)))}@${domain}`);
+  // 身份证：18 位（末位可为数字或 X）-> 保留前 6 后 4
+  s = s.replace(/(?<!\d)(\d{6})\d{8}([\dXx]{4})(?!\d)/g, '$1********$2');
+  // 15 位旧身份证 -> 保留前 6 后 3
+  s = s.replace(/(?<!\d)(\d{6})(\d{6})(\d{3})(?!\d)/g, '$1*******$3');
+  // 银行卡：13-19 位纯数字 -> 保留前 6 后 4
+  s = s.replace(/(?<!\d)(\d{6})(\d{3,9})(\d{4})(?!\d)/g, '$1******$3');
+  // 微信号 / QQ 号：保留标识，打码号码
+  s = s.replace(/(微信|QQ|qq|Q Q)\s*号?[:：]?\s*([A-Za-z][A-Za-z0-9_-]{4,19}|\d{5,12})/g, '$1：****');
+  // 详细地址门牌：xx路xx号 -> xx路**号
+  s = s.replace(/([\u4e00-\u9fa5]{1,12}?(?:路|街|道|巷|弄|大道))(\d{1,6}号)/g, '$1**号');
+  // 楼栋室号：3栋502室 -> 3栋**室
+  s = s.replace(/(\d{1,4}(?:栋|号楼))(\d{1,4})(?=室|单元|号)/g, '$1**');
+  return s;
+}
+// 脱敏字段分析：扫描已脱敏文本，识别被脱敏的数据类型（上传保存时记录，供前端标注/打印复原）
+const MASKED_FIELD_PATTERNS = [
+  { type: 'phone', label: '手机号', re: /1[3-9]\d\*{4}\d{4}/ },
+  { type: 'landline', label: '座机', re: /0\d{2,3}-?\d{3,4}\*{4}/ },
+  { type: 'email', label: '邮箱', re: /[A-Za-z0-9_+-]\*{1,3}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/ },
+  { type: 'idcard', label: '身份证号', re: /\d{6}\*{7,8}\d{3,4}/ },
+  { type: 'bankcard', label: '银行卡号', re: /\d{6}\*{6}\d{4}/ },
+  { type: 'wechat', label: '微信号/QQ', re: /(?:微信|QQ|qq|Q Q)[：:]\*{4}/ },
+  { type: 'address', label: '门牌号', re: /[\u4e00-\u9fa5]{1,12}?(?:路|街|道|巷|弄|大道)\*{2}号/ },
+  { type: 'building', label: '楼栋室号', re: /\d{1,4}(?:栋|号楼)\*{2}(?=室|单元|号)/ },
+];
+function detectMaskedFields(maskedText) {
+  const text = String(maskedText || '');
+  const found = [];
+  for (const p of MASKED_FIELD_PATTERNS) {
+    const m = text.match(new RegExp(p.re.source, 'g'));
+    if (m && m.length) found.push({ type: p.type, label: p.label, count: m.length });
+  }
+  return found;
+}
 const escapeHtml = value => String(value || '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const cleanReportPart = (value, fallback) => String(value || fallback).trim().replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '-').slice(0, 40) || fallback;
 function reportName(createdAt, companyShortName, jobTitle) {
@@ -236,7 +281,7 @@ app.post('/api/login', async (req, res) => { const { email, password } = req.bod
 app.get('/api/session', async (req, res) => { const db = await readDb(); const session = currentSession(req, db); const user = session && db.users.find(x => x.id === session.userId); res.json({ authenticated: Boolean(user), user: user ? { id: user.id, email: user.email, emailVerified: Boolean(user.emailVerifiedAt) } : null }); });
 app.post('/api/verification-email', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); if (user.emailVerifiedAt) return res.json({ verified: true }); const elapsed = Date.now() - new Date(user.verificationSentAt || 0).getTime(); if (elapsed < 60000) return res.status(429).json({ error: `请在 ${Math.ceil((60000 - elapsed) / 1000)} 秒后重试。` }); const token = issueVerification(user); await saveDb(db); try { user.verificationMessageId = await sendVerificationEmail(user.email, token); user.verificationEmailStatus = 'sent'; delete user.verificationEmailError; await saveDb(db); res.json({ sent: true }); } catch (error) { user.verificationEmailStatus = 'failed'; user.verificationEmailError = error.message; await saveDb(db); res.status(502).json({ error: `验证邮件发送失败：${error.message}` }); } });
 app.post('/api/verify-email', async (req, res) => { const token = String(req.body?.token || ''); if (!token) return res.status(400).json({ error: '验证链接无效。' }); const db = await readDb(); const tokenHash = verificationHash(token); const user = db.users.find(item => item.emailVerificationTokenHash === tokenHash); if (!user || !user.emailVerificationExpiresAt || new Date(user.emailVerificationExpiresAt) <= new Date()) return res.status(400).json({ error: '验证链接无效或已过期，请重新发送。' }); user.emailVerifiedAt = new Date().toISOString(); delete user.emailVerificationTokenHash; delete user.emailVerificationExpiresAt; delete user.verificationEmailError; user.verificationEmailStatus = 'verified'; await saveDb(db); res.json({ verified: true, email: user.email }); });
-app.get('/api/resume', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); res.json({ hasResume: Boolean(user.resumeText), text: user.resumeText || '', updatedAt: user.resumeUpdatedAt || user.createdAt, structured: user.resumeStructured || null, structuredAt: user.resumeStructuredAt || null, resumeFile: user.resumeFilePath ? { name: user.resumeFileName || '简历文件', mime: user.resumeFileMime || 'application/octet-stream', size: user.resumeFileSize || 0, uploadedAt: user.resumeFileUploadedAt || null } : null }); });
+app.get('/api/resume', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); res.json({ hasResume: Boolean(user.resumeText), text: maskResumePII(user.resumeText || ''), masked: true, maskedFields: user.resumeMaskedFields && user.resumeMaskedFields.length ? user.resumeMaskedFields : detectMaskedFields(maskResumePII(user.resumeText || '')), updatedAt: user.resumeUpdatedAt || user.createdAt, structured: user.resumeStructured || null, structuredAt: user.resumeStructuredAt || null, resumeFile: user.resumeFilePath ? { name: user.resumeFileName || '简历文件', mime: user.resumeFileMime || 'application/octet-stream', size: user.resumeFileSize || 0, uploadedAt: user.resumeFileUploadedAt || null } : null }); });
 const FILE_REF_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isSafeFileRef = value => typeof value === 'string' && FILE_REF_RE.test(value);
 async function readStagingMeta(fileRef) {
@@ -248,13 +293,16 @@ async function readStagingMeta(fileRef) {
 app.put('/api/resume', async (req, res) => {
   const text = String(req.body?.text || '').trim();
   if (!text) return res.status(400).json({ error: '简历内容不能为空。' });
+  // 隐私脱敏：保存前对手机号、邮箱、证件号等敏感信息打码，库中只存脱敏文本，AI 分析也只看到脱敏内容
+  const maskedText = maskResumePII(text);
   const fileRef = String(req.body?.fileRef || '');
   const db = await readDb();
   const user = currentUser(req, db);
   if (!user) return res.status(401).json({ error: '请先登录。' });
-  const resumeTextChanged = user.resumeText !== text;
+  const resumeTextChanged = user.resumeText !== maskedText;
   let structuredError = '';
-  user.resumeText = text;
+  user.resumeText = maskedText;
+  user.resumeMaskedFields = detectMaskedFields(maskedText);
   user.resumeUpdatedAt = new Date().toISOString();
   if (fileRef) {
     if (!isSafeFileRef(fileRef)) return res.status(400).json({ error: '简历文件标识无效，请重新上传。' });
@@ -278,7 +326,12 @@ app.put('/api/resume', async (req, res) => {
   }
   if (resumeTextChanged || !user.resumeStructured) {
     try {
-      const result = await structureResume(text);
+      const result = await structureResume(maskedText);
+      // 结构化字段兜底脱敏（防止 AI 从上下文中还原出真实联系方式）
+      if (result.structured?.basic) {
+        if (typeof result.structured.basic.phone === 'string') result.structured.basic.phone = maskResumePII(result.structured.basic.phone);
+        if (typeof result.structured.basic.email === 'string') result.structured.basic.email = maskResumePII(result.structured.basic.email);
+      }
       user.resumeStructured = result.structured;
       user.resumeStructuredUsage = result.usage;
       user.resumeStructuredAt = new Date().toISOString();
@@ -288,7 +341,7 @@ app.put('/api/resume', async (req, res) => {
     }
   }
   await saveDb(db);
-  res.json({ saved: true, hasResumeFile: Boolean(user.resumeFilePath), structured: Boolean(user.resumeStructured), structuredError });
+  res.json({ saved: true, masked: true, maskedFields: user.resumeMaskedFields || [], hasResumeFile: Boolean(user.resumeFilePath), structured: Boolean(user.resumeStructured), structuredError });
 });
 async function extractResume(file) {
   if (file.mimetype === 'application/pdf') { const parser = new PDFParse({ data: await fs.readFile(file.path) }); const result = await parser.getText(); await parser.destroy(); return result.text; }
@@ -330,10 +383,12 @@ app.post('/api/analyze', async (req, res) => {
   if (!user.emailVerifiedAt) return res.status(403).json({ error: '请先验证注册邮箱，再生成分析报告。', code: 'EMAIL_NOT_VERIFIED' });
   const { resumeText, jobText, jobTitle, companyShortName } = req.body; const email = user.email;
   if (!resumeText || !jobText) return res.status(400).json({ error: '请先提供简历文本和岗位内容。' });
+  // 隐私脱敏：发送 AI 前对简历打码，库中存的是脱敏文本，未脱敏的请求文本也先脱敏再使用
+  const maskedResume = maskResumePII(resumeText);
   // 简历输入：优先使用已保存并结构化的 LLM 格式简历（更精准、省 token），未结构化或文本不一致时回退原始文本
-  let resumeInput = resumeText;
-  if (user.resumeStructured && String(user.resumeText || '').trim() === String(resumeText).trim()) {
-    resumeInput = `【简历结构化数据】\n${JSON.stringify(user.resumeStructured, null, 2)}\n【简历原文】\n${resumeText}`;
+  let resumeInput = maskedResume;
+  if (user.resumeStructured && maskResumePII(String(user.resumeText || '')).trim() === maskedResume.trim()) {
+    resumeInput = `【简历结构化数据】\n${JSON.stringify(user.resumeStructured, null, 2)}\n【简历原文】\n${maskedResume}`;
   }
   const prompt = `你是严谨的中文职业顾问。只依据给出的简历与岗位内容分析，不能承诺 offer 或虚构经历。输出严格 JSON：{company_short_name,job_title,summary, qualification:{status,evidence,risks}, dimensions:[{name,score_0_to_5,evidence,gap}], verify:[string], resume_rewrite:[{section,original_issue,rewrite_direction,example}], actions:[string]}。company_short_name 去掉有限公司等工商后缀。公司简称：${companyShortName || '请从岗位正文识别'}\n岗位名称：${jobTitle || '请从岗位正文识别'}\n岗位内容：${jobText}\n简历：${resumeInput}`;
   try {

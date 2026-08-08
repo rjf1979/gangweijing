@@ -9,6 +9,8 @@
       <span id="resume-file-meta" class="file-meta" :class="{ hidden: !file }">{{ fileMeta }}</span>
     </label>
 
+    <p class="fine privacy-note">🔒 简历保存后自动脱敏（手机号、邮箱、证件号等敏感信息），仅用于 AI 分析，保护你的隐私。</p>
+
     <div class="upload-progress" :class="{ 'is-busy': busy }" :hidden="!uploading">
       <div class="upload-track" role="progressbar" aria-label="简历上传进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="uploadPct">
         <span class="upload-fill" :style="{ width: uploadPct + '%' }"></span>
