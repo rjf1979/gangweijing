@@ -99,7 +99,7 @@ export const BLOCK_DEFS = [
   { id: 'skills', title: '技能特长', aliases: ['技能', '专业技能', '技能特长', '技术栈', '核心技能', '专业能力'], kind: 'skills' },
   { id: 'certificates', title: '证书资质', aliases: ['证书', '资格证书', '证书资质', '资质证书', '职称'], kind: 'lines' },
   { id: 'awards', title: '获奖荣誉', aliases: ['获奖', '荣誉', '获奖荣誉', '奖项', '所获荣誉'], kind: 'lines' },
-  { id: 'self_evaluation', title: '自我评价', aliases: ['自我评价', '个人评价', '自我评估', '自我总结'], kind: 'text' },
+  { id: 'self_evaluation', title: '自我评价', aliases: ['自我评价', '个人评价', '自我评估', '自我总结', '个人优势', '核心优势', '个人亮点', '个人特长'], kind: 'text' },
 ]
 
 // 高频自由区块标题（注册表之外，文本中出现即自动生成区块）

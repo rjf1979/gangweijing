@@ -7,6 +7,7 @@ import mammoth from 'mammoth';
 import { PDFParse } from 'pdf-parse';
 import { pdf as pdfToImages } from 'pdf-to-img';
 import { createPgStore } from './db.js';
+import { analyzePdf, analyzeDocx } from './resumeParse.js';
 
 const app = express();
 const root = path.resolve('.');
@@ -361,7 +362,7 @@ app.put('/api/resume', async (req, res) => {
 const RESUME_STRUCTURE_SCHEMA = `{schema_version:1,basic:{name,gender,birth_year,phone,email,location,current_company,current_title,years_of_experience,expected_salary,job_intention,available_date},education:[{school,degree,major,start_date,end_date,gpa,honors:[]}],work_experience:[{company,title,start_date,end_date,industry,responsibilities:[],achievements:[],skills_used:[]}],project_experience:[{name,role,start_date,end_date,description,achievements:[],tech_stack:[]}],skills:{technical:[],tools:[],soft:[],languages:[]},certificates:[],awards:[],self_evaluation,summary,warnings:[]}`;
 const RESUME_OCR_PROMPT = `你是资深中文简历解析专家，正在 OCR 识别候选人上传的简历页面图片（多页按阅读顺序排列）。
 输出严格 JSON（不要输出任何多余文字或代码块标记）：{"text":"完整保留简历文本与版式结构，段落/条目前保留原始标题行（如「个人摘要」「工作经历」「技能特长」），保持阅读顺序，不遗漏真实信息","structured":${RESUME_STRUCTURE_SCHEMA},"warnings":[]}
-结构化要求：只提取简历中真实存在的信息，绝不编造或推测；无法确定的内容留空字符串或空数组，不要输出 null；日期统一为 "YYYY-MM" 或 "YYYY" 或 ""；工作经历按时间倒序；responsibilities 与 achievements 各用数组，每项一句话并保留量化数据；skills.technical 是技术栈/框架/编程语言，tools 是工具软件，soft 是软技能，languages 是语言能力；years_of_experience、birth_year 用数字，无法确定时输出 null。`;
+结构化要求：只提取简历中真实存在的信息，绝不编造或推测；无法确定的内容留空字符串或空数组，不要输出 null；日期统一为 "YYYY-MM" 或 "YYYY" 或 ""；工作经历按时间倒序；responsibilities 与 achievements 各用数组，每项一句话并保留量化数据；skills.technical 是技术栈/框架/编程语言，tools 是工具软件，soft 是软技能，languages 是语言能力；years_of_experience、birth_year 用数字，无法确定时输出 null。自评类标题（个人优势、个人亮点、核心优势、个人特长、职业优势、竞争优势等）下的内容必须放入 structured.self_evaluation，严禁混入 work_experience 条目；归属判断以标题与版式位置为据，不依赖正文先后顺序。`;
 const MAX_OCR_PAGES = 6;
 // 把 PDF 渲染成页面 PNG（最多 MAX_OCR_PAGES 页）；图片直接使用；DOCX 不支持返回 null
 async function renderResumePageBuffers(filePath, mimetype) {
@@ -436,7 +437,19 @@ app.post('/api/extract/resume', upload.single('resume'), async (req, res) => {
     await fs.rename(file.path, stagingPath).catch(async () => { await fs.copyFile(file.path, stagingPath); await fs.unlink(file.path).catch(() => {}); });
     staged = true;
     await fs.writeFile(stagingPath + '.meta.json', JSON.stringify({ name: normalizeResumeFileName(file.originalname) || 'resume', mime: mimetype || 'application/octet-stream', size: file.size || 0 }));
-    // OCR 模式：PDF/图片 → 多模态模型识别版式结构（结构化 + 文本）
+    // 1) 本地版式解析优先：文本型 PDF 用坐标+字号分析、DOCX 用 mammoth 结构 → 结构化 + 文本（不调 AI、不产生费用）
+    if (mimetype === 'application/pdf') {
+      const layout = await analyzePdf(stagingPath);
+      if (layout?.structured) {
+        return res.json({ text: layout.text, structured: layout.structured, fileRef, mode: 'layout', usage: null, costUsd: null, costSource: null, model: null, warnings: layout.structured.warnings || [] });
+      }
+    } else if (mimetype.includes('wordprocessingml')) {
+      const layout = await analyzeDocx(stagingPath);
+      if (layout?.structured) {
+        return res.json({ text: layout.text, structured: layout.structured, fileRef, mode: 'layout', usage: null, costUsd: null, costSource: null, model: null, warnings: layout.structured.warnings || [] });
+      }
+    }
+    // 2) 本地解析失败（扫描件/复杂版式）→ AI OCR 兜底（PDF/图片）
     const isOcrCandidate = mimetype === 'application/pdf' || mimetype.startsWith('image/');
     if (isOcrCandidate) {
       try {
