@@ -1,4 +1,4 @@
-import { store, setSession, clearSession } from './store'
+﻿import { store, setSession, clearSession } from './store'
 
 const API_BASE = '/api/admin'
 
@@ -30,7 +30,7 @@ async function request(path, options = {}) {
 
   if (response.status === 401) {
     clearSession()
-    if (window.location.pathname !== '/login') window.location.assign('/login')
+    if (window.location.pathname !== '/login') window.location.assign('/admin/login')
     throw new ApiError(data?.error || '登录已过期，请重新登录。', 401)
   }
 
@@ -88,7 +88,7 @@ export const api = {
     }
     if (response.status === 401) {
       clearSession()
-      if (window.location.pathname !== '/login') window.location.assign('/login')
+      if (window.location.pathname !== '/login') window.location.assign('/admin/login')
       throw new ApiError('登录已过期，请重新登录。', 401)
     }
     if (!response.ok) {

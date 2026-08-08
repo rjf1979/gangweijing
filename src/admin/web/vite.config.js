@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+﻿import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import path from 'node:path'
 
@@ -6,7 +6,7 @@ import path from 'node:path'
 export default defineConfig({
   root: path.resolve(process.cwd()),
   plugins: [vue()],
-  base: '/',
+  base: '/admin/',
   build: {
     outDir: path.resolve(process.cwd(), 'dist'),
     emptyOutDir: true,

@@ -323,7 +323,7 @@ async function changePassword() {
     passwordForm.oldPassword = ''
     passwordForm.newPassword = ''
     setTimeout(() => {
-      api.logout().then(() => { window.location.assign('/login') })
+      api.logout().then(() => { window.location.assign('/admin/login') })
     }, 800)
   } catch (err) {
     toast(err.message || '修改失败', 'error')
@@ -629,3 +629,4 @@ onMounted(load)
   opacity: 0;
 }
 </style>
+
