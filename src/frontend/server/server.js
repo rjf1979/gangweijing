@@ -111,8 +111,8 @@ const computeReportCost = async usage => {
   const value = (Number(usage.inputTokens) / 1e6) * price.input + (Number(usage.outputTokens) / 1e6) * price.output;
   return { value, source: 'estimate', currency: 'USD' };
 };
-async function callResponses(body, opts = {}) { await refreshAppConfig(); const base = (opts.baseUrl || aiBaseUrl()).replace(/\/$/, ''); const key = opts.apiKey || process.env.OPENAI_API_KEY; const response = await fetch(`${base}/responses`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(`AI 接口返回 ${response.status}`); return response.json(); }
-async function callChatCompletions(body, opts = {}) { await refreshAppConfig(); const base = (opts.baseUrl || aiBaseUrl()).replace(/\/$/, ''); const key = opts.apiKey || process.env.OPENAI_API_KEY; const response = await fetch(`${base}/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(`AI 接口返回 ${response.status}`); return response.json(); }
+async function callResponses(body, opts = {}) { await refreshAppConfig(); const base = (opts.baseUrl || aiBaseUrl()).replace(/\/$/, ''); const key = opts.apiKey || process.env.OPENAI_API_KEY; const response = await fetch(`${base}/responses`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}) }); if (!response.ok) throw new Error(`AI 接口返回 ${response.status}`); return response.json(); }
+async function callChatCompletions(body, opts = {}) { await refreshAppConfig(); const base = (opts.baseUrl || aiBaseUrl()).replace(/\/$/, ''); const key = opts.apiKey || process.env.OPENAI_API_KEY; const response = await fetch(`${base}/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}) }); if (!response.ok) throw new Error(`AI 接口返回 ${response.status}`); return response.json(); }
 async function resolveAiModel(modelType) {
   try { const row = await dbStore.getDefaultAiModel(modelType); if (row) return row; } catch (error) { console.error('读取主模型失败：', error.message); }
   return null;
@@ -131,6 +131,42 @@ async function resolveAiCredential(model) {
     if (def && def.enabled && def.api_key) return { apiKey: def.api_key, baseUrl: (def.base_url || '').replace(/\/+$/, '') || null };
   } catch (error) { console.error('读取当前使用 Key 失败：', error.message); }
   return { apiKey: process.env.OPENAI_API_KEY || '', baseUrl: null };
+}
+
+// 简历结构化：将简历文本解析为 LLM 友好 JSON，存入 PG 供 AI 分析直接使用
+const RESUME_STRUCTURE_PROMPT = `你是资深中文简历解析专家。将下面的简历文本解析为结构化 JSON，供 AI 求职匹配系统直接使用。要求：
+1. 只提取简历中真实存在的信息，绝不编造或推测；无法确定的内容留空字符串或空数组，不要输出 null。
+2. 日期统一为 "YYYY-MM" 或 "YYYY" 或 ""。
+3. 工作经历按时间倒序排列；responsibilities 与 achievements 各用数组，每项一句话并保留量化数据。
+4. skills.technical 是技术栈/框架/编程语言，tools 是工具软件，soft 是软技能，languages 是语言能力。
+5. years_of_experience、birth_year 用数字，无法确定时输出 null。
+6. 输出严格 JSON，不要输出任何多余文字或代码块标记。
+
+JSON 结构：{schema_version:1,basic:{name,gender,birth_year,phone,email,location,current_company,current_title,years_of_experience,expected_salary,job_intention,available_date},education:[{school,degree,major,start_date,end_date,gpa,honors:[]}],work_experience:[{company,title,start_date,end_date,industry,responsibilities:[],achievements:[],skills_used:[]}],project_experience:[{name,role,start_date,end_date,description,achievements:[],tech_stack:[]}],skills:{technical:[],tools:[],soft:[],languages:[]},certificates:[],awards:[],self_evaluation,summary,warnings:[]}
+
+简历文本：
+`;
+async function structureResume(text) {
+  await refreshAppConfig();
+  const active = await resolveAiModel('text');
+  const credential = await resolveAiCredential(active);
+  if (!credential.apiKey) throw new Error('尚未配置 AI 接口，无法结构化简历。');
+  const prompt = RESUME_STRUCTURE_PROMPT + String(text || '');
+  const callOpts = { timeoutMs: 90000, ...(credential.apiKey ? { apiKey: credential.apiKey, ...(credential.baseUrl ? { baseUrl: credential.baseUrl } : {}) } : {}) };
+  let payload;
+  if (active?.apiProtocol === 'responses') {
+    payload = await callResponses({ model: active.modelId, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.1, text: { format: { type: 'json_object' } } }, callOpts);
+  } else if (active) {
+    payload = await callChatCompletions({ model: active.modelId, messages: [{ role: 'user', content: prompt }], temperature: 0.1, response_format: { type: 'json_object' } }, callOpts);
+  } else {
+    payload = await callResponses({ model: process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.1, text: { format: { type: 'json_object' } } }, callOpts);
+  }
+  const model = active?.modelId || process.env.OPENAI_MODEL;
+  const parsed = parseJsonText(extractText(payload));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || (!parsed.basic && !parsed.education && !parsed.work_experience && !parsed.skills)) throw new Error('AI 返回的简历结构化数据不完整，请稍后重试。');
+  const usage = extractUsage(payload, model);
+  const cost = await computeReportCost(usage);
+  return { structured: parsed, usage: usage ? { ...usage, costSource: cost.source, currency: cost.currency } : null, cost, model };
 }
 const escapeHtml = value => String(value || '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const cleanReportPart = (value, fallback) => String(value || fallback).trim().replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '-').slice(0, 40) || fallback;
@@ -200,7 +236,7 @@ app.post('/api/login', async (req, res) => { const { email, password } = req.bod
 app.get('/api/session', async (req, res) => { const db = await readDb(); const session = currentSession(req, db); const user = session && db.users.find(x => x.id === session.userId); res.json({ authenticated: Boolean(user), user: user ? { id: user.id, email: user.email, emailVerified: Boolean(user.emailVerifiedAt) } : null }); });
 app.post('/api/verification-email', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); if (user.emailVerifiedAt) return res.json({ verified: true }); const elapsed = Date.now() - new Date(user.verificationSentAt || 0).getTime(); if (elapsed < 60000) return res.status(429).json({ error: `请在 ${Math.ceil((60000 - elapsed) / 1000)} 秒后重试。` }); const token = issueVerification(user); await saveDb(db); try { user.verificationMessageId = await sendVerificationEmail(user.email, token); user.verificationEmailStatus = 'sent'; delete user.verificationEmailError; await saveDb(db); res.json({ sent: true }); } catch (error) { user.verificationEmailStatus = 'failed'; user.verificationEmailError = error.message; await saveDb(db); res.status(502).json({ error: `验证邮件发送失败：${error.message}` }); } });
 app.post('/api/verify-email', async (req, res) => { const token = String(req.body?.token || ''); if (!token) return res.status(400).json({ error: '验证链接无效。' }); const db = await readDb(); const tokenHash = verificationHash(token); const user = db.users.find(item => item.emailVerificationTokenHash === tokenHash); if (!user || !user.emailVerificationExpiresAt || new Date(user.emailVerificationExpiresAt) <= new Date()) return res.status(400).json({ error: '验证链接无效或已过期，请重新发送。' }); user.emailVerifiedAt = new Date().toISOString(); delete user.emailVerificationTokenHash; delete user.emailVerificationExpiresAt; delete user.verificationEmailError; user.verificationEmailStatus = 'verified'; await saveDb(db); res.json({ verified: true, email: user.email }); });
-app.get('/api/resume', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); res.json({ hasResume: Boolean(user.resumeText), text: user.resumeText || '', updatedAt: user.resumeUpdatedAt || user.createdAt, resumeFile: user.resumeFilePath ? { name: user.resumeFileName || '简历文件', mime: user.resumeFileMime || 'application/octet-stream', size: user.resumeFileSize || 0, uploadedAt: user.resumeFileUploadedAt || null } : null }); });
+app.get('/api/resume', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); res.json({ hasResume: Boolean(user.resumeText), text: user.resumeText || '', updatedAt: user.resumeUpdatedAt || user.createdAt, structured: user.resumeStructured || null, structuredAt: user.resumeStructuredAt || null, resumeFile: user.resumeFilePath ? { name: user.resumeFileName || '简历文件', mime: user.resumeFileMime || 'application/octet-stream', size: user.resumeFileSize || 0, uploadedAt: user.resumeFileUploadedAt || null } : null }); });
 const FILE_REF_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isSafeFileRef = value => typeof value === 'string' && FILE_REF_RE.test(value);
 async function readStagingMeta(fileRef) {
@@ -216,6 +252,8 @@ app.put('/api/resume', async (req, res) => {
   const db = await readDb();
   const user = currentUser(req, db);
   if (!user) return res.status(401).json({ error: '请先登录。' });
+  const resumeTextChanged = user.resumeText !== text;
+  let structuredError = '';
   user.resumeText = text;
   user.resumeUpdatedAt = new Date().toISOString();
   if (fileRef) {
@@ -238,8 +276,19 @@ app.put('/api/resume', async (req, res) => {
     user.resumeFileUploadedAt = new Date().toISOString();
     if (oldPath && oldPath !== target) await fs.rm(oldPath, { force: true }).catch(() => {});
   }
+  if (resumeTextChanged || !user.resumeStructured) {
+    try {
+      const result = await structureResume(text);
+      user.resumeStructured = result.structured;
+      user.resumeStructuredUsage = result.usage;
+      user.resumeStructuredAt = new Date().toISOString();
+    } catch (error) {
+      if (resumeTextChanged) { user.resumeStructured = null; user.resumeStructuredUsage = null; user.resumeStructuredAt = null; }
+      structuredError = error.message;
+    }
+  }
   await saveDb(db);
-  res.json({ saved: true, hasResumeFile: Boolean(user.resumeFilePath) });
+  res.json({ saved: true, hasResumeFile: Boolean(user.resumeFilePath), structured: Boolean(user.resumeStructured), structuredError });
 });
 async function extractResume(file) {
   if (file.mimetype === 'application/pdf') { const parser = new PDFParse({ data: await fs.readFile(file.path) }); const result = await parser.getText(); await parser.destroy(); return result.text; }
@@ -281,7 +330,12 @@ app.post('/api/analyze', async (req, res) => {
   if (!user.emailVerifiedAt) return res.status(403).json({ error: '请先验证注册邮箱，再生成分析报告。', code: 'EMAIL_NOT_VERIFIED' });
   const { resumeText, jobText, jobTitle, companyShortName } = req.body; const email = user.email;
   if (!resumeText || !jobText) return res.status(400).json({ error: '请先提供简历文本和岗位内容。' });
-  const prompt = `你是严谨的中文职业顾问。只依据给出的简历与岗位内容分析，不能承诺 offer 或虚构经历。输出严格 JSON：{company_short_name,job_title,summary, qualification:{status,evidence,risks}, dimensions:[{name,score_0_to_5,evidence,gap}], verify:[string], resume_rewrite:[{section,original_issue,rewrite_direction,example}], actions:[string]}。company_short_name 去掉有限公司等工商后缀。公司简称：${companyShortName || '请从岗位正文识别'}\n岗位名称：${jobTitle || '请从岗位正文识别'}\n岗位内容：${jobText}\n简历：${resumeText}`;
+  // 简历输入：优先使用已保存并结构化的 LLM 格式简历（更精准、省 token），未结构化或文本不一致时回退原始文本
+  let resumeInput = resumeText;
+  if (user.resumeStructured && String(user.resumeText || '').trim() === String(resumeText).trim()) {
+    resumeInput = `【简历结构化数据】\n${JSON.stringify(user.resumeStructured, null, 2)}\n【简历原文】\n${resumeText}`;
+  }
+  const prompt = `你是严谨的中文职业顾问。只依据给出的简历与岗位内容分析，不能承诺 offer 或虚构经历。输出严格 JSON：{company_short_name,job_title,summary, qualification:{status,evidence,risks}, dimensions:[{name,score_0_to_5,evidence,gap}], verify:[string], resume_rewrite:[{section,original_issue,rewrite_direction,example}], actions:[string]}。company_short_name 去掉有限公司等工商后缀。公司简称：${companyShortName || '请从岗位正文识别'}\n岗位名称：${jobTitle || '请从岗位正文识别'}\n岗位内容：${jobText}\n简历：${resumeInput}`;
   try {
     let payload;
     let usedModel;
