@@ -365,7 +365,7 @@ app.get('/api/admin/reports', requireAdmin, async (req, res) => {
     store.searchReports({ q, status, emailStatus, limit: pageSize, offset }),
     store.countSearchReports({ q, status, emailStatus }),
   ]);
-  res.json({ reports: rows.map(r => ({ ...r, cost_usd: r.cost_usd == null ? null : Number(r.cost_usd) })), total, page, pageSize });
+  res.json({ reports: rows.map(r => ({ ...r, cost_usd: r.cost_usd == null ? null : Number(r.cost_usd), costSource: r.cost_source || r.usage?.costSource || null })), total, page, pageSize });
 });
 
 app.get('/api/admin/reports/:id', requireAdmin, async (req, res) => {
@@ -380,6 +380,7 @@ app.get('/api/admin/reports/:id', requireAdmin, async (req, res) => {
       createdAt: iso(report.created_at), updatedAt: iso(report.updated_at),
       usage: report.usage || null,
       costUsd: report.cost_usd == null ? null : Number(report.cost_usd),
+      costSource: report.cost_source || report.usage?.costSource || null,
       data: report.report,
     },
   });

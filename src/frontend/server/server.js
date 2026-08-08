@@ -60,12 +60,16 @@ const extractText = payload => {
   if (Array.isArray(chat)) return chat.map(item => item?.text || item?.content || '').join('');
   return outputText(payload);
 };
+const toNumber = value => { if (value == null) return null; const n = Number(value); return Number.isFinite(n) ? n : null; };
+// 从 AI 响应 usage 中提取 token 用量与“真实费用”：中转站（one-api/new-api 等）常返回 cost/total_cost/prompt_cost+completion_cost 等字段
 const extractUsage = (payload, model) => {
   if (!payload?.usage) return null;
   const u = payload.usage;
   const inputTokens = Number(u.input_tokens ?? u.prompt_tokens ?? 0);
   const outputTokens = Number(u.output_tokens ?? u.completion_tokens ?? 0);
-  return { model, inputTokens, outputTokens, totalTokens: Number(u.total_tokens ?? (inputTokens + outputTokens)) };
+  const apiCost = toNumber(u.cost ?? u.total_cost ?? u.amount ?? (u.prompt_cost != null && u.completion_cost != null ? u.prompt_cost + u.completion_cost : null) ?? (u.input_cost != null && u.output_cost != null ? u.input_cost + u.output_cost : null));
+  const currency = String(u.currency || u.currency_symbol || '').trim().toUpperCase() || 'USD';
+  return { model, inputTokens, outputTokens, totalTokens: Number(u.total_tokens ?? (inputTokens + outputTokens)), cost: apiCost, currency };
 };
 
 // 模型单价（美元 / 百万 tokens），OpenAI 官方公开价目，用于估算报告费用（非账单）
@@ -83,16 +87,29 @@ const MODEL_PRICES = {
   'o3': { input: 2, output: 8 },
   'o3-mini': { input: 1.1, output: 4.4 },
 };
-const estimateCost = async (model, inputTokens, outputTokens) => {
-  const key = String(model || '').toLowerCase();
+// 报告费用：优先使用接口返回的真实费用（costSource=api），缺失时按模型价目估算（costSource=estimate）
+const computeReportCost = async usage => {
+  if (!usage) return { value: null, source: null, currency: 'USD' };
+  if (usage.cost != null) {
+    const n = Number(usage.cost);
+    if (Number.isFinite(n)) return { value: n, source: 'api', currency: usage.currency || 'USD' };
+  }
+  const key = String(usage.model || '').toLowerCase();
   let price = null;
   try {
     const row = await dbStore.findAiModelByModelId(key);
     if (row && row.inputPrice != null && row.outputPrice != null) price = { input: row.inputPrice, output: row.outputPrice };
   } catch {}
+  if (!price) {
+    try {
+      const ref = await dbStore.findAiModelReferencePrice(key);
+      if (ref && ref.input_price != null && ref.output_price != null) price = { input: Number(ref.input_price), output: Number(ref.output_price) };
+    } catch {}
+  }
   if (!price) price = MODEL_PRICES[key] || MODEL_PRICES[key.split('/').pop()];
-  if (!price) return null;
-  return (Number(inputTokens) / 1e6) * price.input + (Number(outputTokens) / 1e6) * price.output;
+  if (!price) return { value: null, source: null, currency: 'USD' };
+  const value = (Number(usage.inputTokens) / 1e6) * price.input + (Number(usage.outputTokens) / 1e6) * price.output;
+  return { value, source: 'estimate', currency: 'USD' };
 };
 async function callResponses(body, opts = {}) { await refreshAppConfig(); const base = (opts.baseUrl || aiBaseUrl()).replace(/\/$/, ''); const key = opts.apiKey || process.env.OPENAI_API_KEY; const response = await fetch(`${base}/responses`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(`AI 接口返回 ${response.status}`); return response.json(); }
 async function callChatCompletions(body, opts = {}) { await refreshAppConfig(); const base = (opts.baseUrl || aiBaseUrl()).replace(/\/$/, ''); const key = opts.apiKey || process.env.OPENAI_API_KEY; const response = await fetch(`${base}/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(`AI 接口返回 ${response.status}`); return response.json(); }
@@ -254,7 +271,7 @@ app.post('/api/extract/screenshot', upload.single('screenshot'), async (req, res
     } else {
       payload = await callResponses({ model: process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: image }] }], text: { format: { type: 'json_object' } } }, ocrOpts);
     }
-    const result = parseJsonText(extractText(payload)); res.json({ text: result.text || '', companyShortName: result.company_short_name || '', jobTitle: result.job_title || '', warnings: result.warnings || [] }); } catch (error) { res.status(502).json({ error: `AI 截图识别失败：${error.message}` }); } finally { if (req.file?.path) await fs.unlink(req.file.path).catch(() => {}); } });
+    const result = parseJsonText(extractText(payload)); const ocrModel = activeOcr?.modelId || process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL; const ocrUsage = extractUsage(payload, ocrModel); const ocrCost = await computeReportCost(ocrUsage); res.json({ text: result.text || '', companyShortName: result.company_short_name || '', jobTitle: result.job_title || '', warnings: result.warnings || [], usage: ocrUsage ? { ...ocrUsage, costSource: ocrCost.source, currency: ocrCost.currency } : null, costUsd: ocrCost.value, costSource: ocrCost.source }); } catch (error) { res.status(502).json({ error: `AI 截图识别失败：${error.message}` }); } finally { if (req.file?.path) await fs.unlink(req.file.path).catch(() => {}); } });
 app.post('/api/analyze', async (req, res) => {
   await refreshAppConfig();
   const active = await resolveAiModel('text');
@@ -279,8 +296,10 @@ app.post('/api/analyze', async (req, res) => {
     usedModel = active?.modelId || process.env.OPENAI_MODEL;
     const report = parseJsonText(extractText(payload));
     const usage = extractUsage(payload, usedModel);
-    const costUsd = usage ? await estimateCost(usage.model, usage.inputTokens, usage.outputTokens) : null;
-    const createdAt = new Date().toISOString(); const finalCompany = companyShortName || report.company_short_name || ''; const finalJobTitle = jobTitle || report.job_title || ''; const accessToken = crypto.randomBytes(24).toString('base64url'); const record = { id: crypto.randomUUID(), accessToken, userId: user.id, email, companyShortName: finalCompany, jobTitle: finalJobTitle, reportName: reportName(createdAt, finalCompany, finalJobTitle), status: 'completed', emailStatus: 'pending', report, usage, costUsd, createdAt, updatedAt: createdAt }; db.reports.push(record); await saveDb(db);
+    const cost = await computeReportCost(usage);
+    const costUsd = cost.value;
+    const costSource = cost.source;
+    const createdAt = new Date().toISOString(); const finalCompany = companyShortName || report.company_short_name || ''; const finalJobTitle = jobTitle || report.job_title || ''; const accessToken = crypto.randomBytes(24).toString('base64url'); const record = { id: crypto.randomUUID(), accessToken, userId: user.id, email, companyShortName: finalCompany, jobTitle: finalJobTitle, reportName: reportName(createdAt, finalCompany, finalJobTitle), status: 'completed', emailStatus: 'pending', report, usage: usage ? { ...usage, costSource, currency: cost.currency } : null, costUsd, costSource, createdAt, updatedAt: createdAt }; db.reports.push(record); await saveDb(db);
     const reportUrl = `${publicAppUrl()}/report/${accessToken}`;
     let emailSent = false; try { await sendReportEmail(email, reportUrl, report); emailSent = Boolean(email && (appConfig.resendApiKey || process.env.RESEND_API_KEY) && (appConfig.emailFrom || process.env.EMAIL_FROM)); record.emailStatus = emailSent ? 'sent' : 'not_configured'; } catch (emailError) { record.emailStatus = 'failed'; console.error(emailError.message); } record.updatedAt = new Date().toISOString(); await saveDb(db);
     res.json({ id: record.id, reportName: record.reportName, reportUrl, emailSent, report });

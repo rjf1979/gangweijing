@@ -62,11 +62,11 @@
             </dd>
           </div>
           <div class="meta-item">
-            <dt>估算费用</dt>
+            <dt>AI 费用</dt>
             <dd class="cell-num">
               <template v-if="report.costUsd != null">
                 {{ formatCost(report.costUsd) }}
-                <span class="meta-hint">按模型公开价目估算</span>
+                <span class="meta-hint">{{ costHint }}</span>
               </template>
               <template v-else>—</template>
             </dd>
@@ -218,6 +218,16 @@ const qualBadgeClass = computed(() => {
   return 'badge-warning'
 })
 
+const costHint = computed(() => {
+  const source = report.value?.costSource
+  if (source === 'api') {
+    const currency = report.value?.usage?.currency
+    return currency && currency !== 'USD' ? `接口返回真实费用（${currency}）` : '接口返回真实费用'
+  }
+  if (source === 'estimate') return '按模型价目估算'
+  return '—'
+})
+
 function formatDateTime(value) {
   if (!value) return '—'
   return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
@@ -226,9 +236,10 @@ function formatDateTime(value) {
 function formatCost(value) {
   if (value == null) return '—'
   const n = Number(value)
-  if (n === 0) return '$0.00'
-  if (n < 0.01) return '<$0.01'
-  return `$${n.toFixed(4)}`
+  if (!Number.isFinite(n)) return '—'
+  if (n === 0) return '$0.000000'
+  if (n < 0.0000005) return '<$0.000001'
+  return `$${n.toFixed(6)}`
 }
 
 async function load() {

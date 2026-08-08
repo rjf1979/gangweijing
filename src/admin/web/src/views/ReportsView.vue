@@ -68,6 +68,7 @@
                 <template v-if="report.usage?.totalTokens">
                   <div>{{ report.usage.totalTokens.toLocaleString() }} <span class="cost-token-label">tokens</span></div>
                   <div class="cell-cost-amount">{{ formatCost(report.cost_usd) }}</div>
+                  <span v-if="report.costSource" class="cost-source-tag" :class="report.costSource === 'api' ? 'tag-real' : 'tag-estimate'">{{ report.costSource === 'api' ? '真实' : '估算' }}</span>
                 </template>
                 <span v-else>—</span>
               </td>
@@ -155,9 +156,10 @@ function formatDateTime(value) {
 function formatCost(value) {
   if (value == null) return '—'
   const n = Number(value)
-  if (n === 0) return '$0.00'
-  if (n < 0.01) return '<$0.01'
-  return `$${n.toFixed(4)}`
+  if (!Number.isFinite(n)) return '—'
+  if (n === 0) return '$0.000000'
+  if (n < 0.0000005) return '<$0.000001'
+  return `$${n.toFixed(6)}`
 }
 
 async function load() {
@@ -279,6 +281,22 @@ onMounted(load)
   color: var(--color-text-muted);
   font-size: 12px;
   margin-top: 2px;
+}
+.cost-source-tag {
+  display: inline-block;
+  margin-top: 2px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  line-height: 18px;
+}
+.cost-source-tag.tag-real {
+  background: rgba(22, 163, 74, 0.12);
+  color: #16a34a;
+}
+.cost-source-tag.tag-estimate {
+  background: var(--color-surface-3);
+  color: var(--color-text-muted);
 }
 @media (max-width: 1100px) {
   .toolbar { flex-direction: column; align-items: stretch; }

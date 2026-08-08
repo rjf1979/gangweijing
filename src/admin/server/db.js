@@ -494,7 +494,7 @@ export function createPgStore() {
       }
       const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
       const { rows } = await pool.query(
-        `SELECT id, access_token, company_short_name, job_title, report_name, status, email_status, email, usage, cost_usd, created_at
+        `SELECT id, access_token, company_short_name, job_title, report_name, status, email_status, email, usage, cost_usd, cost_source, created_at
          FROM ${reportTable} ${where} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`,
         params
       );

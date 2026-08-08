@@ -12,14 +12,59 @@
   </section>
 
   <section class="neo-section neo-section-blue" aria-labelledby="evidence-heading">
-    <h3 id="evidence-heading">匹配证据</h3>
-    <div>
-      <div v-for="item in report.dimensions" :key="item.name" class="card">
-        <strong>{{ item.name }} · {{ item.score_0_to_5 }}/5</strong>
-        <p>{{ item.evidence }}</p>
-        <p>{{ item.gap }}</p>
+    <h3 id="evidence-heading"><span>02</span> 匹配证据 · 维度评分</h3>
+
+    <div v-if="dims.length" class="dim-overview">
+      <div class="dim-fit-box">
+        <p class="dim-fit-label">综合匹配度</p>
+        <p class="dim-fit-score"><strong>{{ fitPct }}</strong><span>%</span></p>
+        <p class="dim-fit-note">基于 {{ dims.length }} 个维度 · 平均 {{ avgScore }}/5</p>
+        <div class="dim-fit-stats">
+          <span class="stat stat-strong">强项 {{ strongCount }}</span>
+          <span class="stat stat-fair">达标 {{ midCount }}</span>
+          <span class="stat stat-weak">短板 {{ weakCount }}</span>
+        </div>
+        <p v-if="bestDim" class="dim-fit-best"><span>最佳</span>{{ bestDim.name }} {{ bestDim.score }}/5</p>
+        <p v-if="worstDim" class="dim-fit-worst"><span>最弱</span>{{ worstDim.name }} {{ worstDim.score }}/5</p>
+      </div>
+      <div v-if="radar" class="dim-radar">
+        <svg viewBox="0 0 260 220" role="img" aria-label="维度评分雷达图" focusable="false">
+          <polygon v-for="(ring, ri) in radar.rings" :key="'r' + ri" :points="ring" class="radar-ring" />
+          <line v-for="(axis, ai) in radar.axes" :key="'a' + ai" :x1="axis[0]" :y1="axis[1]" :x2="axis[2]" :y2="axis[3]" class="radar-axis" />
+          <polygon :points="radar.points" class="radar-area" />
+          <circle v-for="(pt, pi) in radar.vertices" :key="'v' + pi" :cx="pt[0]" :cy="pt[1]" r="3.6" class="radar-dot" />
+          <text v-for="(lb, li) in radar.labels" :key="'l' + li" :x="lb[0]" :y="lb[1]" text-anchor="middle" class="radar-label">{{ lb[2] }}</text>
+        </svg>
       </div>
     </div>
+
+    <div v-if="dims.length" class="dim-list">
+      <div v-for="(item, i) in sortedDims" :key="item.name" class="dim-card" :class="'dim-level-' + item.level.key">
+        <div class="dim-card-head">
+          <span class="dim-rank">{{ i + 1 }}</span>
+          <strong class="dim-name">{{ item.name }}</strong>
+          <span class="dim-badge" :class="'badge-' + item.level.key">{{ item.level.label }}</span>
+          <span class="dim-score"><strong>{{ item.score }}</strong><small>/5</small></span>
+        </div>
+        <div class="dim-bar-wrap" role="img" :aria-label="item.name + ' 得分 ' + item.score + '/5，即 ' + item.pct + '%'">
+          <span class="dim-bar" :class="'bar-' + item.level.key" :style="{ width: item.pct + '%' }"></span>
+          <span class="dim-bar-ticks" aria-hidden="true"><i v-for="t in 5" :key="t"></i></span>
+        </div>
+        <div class="dim-bar-meta">
+          <span class="dim-pct">{{ item.pct }}%</span>
+          <span class="dim-scale" aria-hidden="true">0·1·2·3·4·5</span>
+        </div>
+        <p v-if="item.evidence.length" class="dim-block">
+          <span class="dim-block-label">证据</span>
+          <template v-for="(e, ei) in item.evidence" :key="'e' + ei"><span class="dim-line">{{ e }}</span></template>
+        </p>
+        <p v-if="item.gap.length" class="dim-block dim-gap">
+          <span class="dim-block-label">差距</span>
+          <template v-for="(g, gi) in item.gap" :key="'g' + gi"><span class="dim-line">{{ g }}</span></template>
+        </p>
+      </div>
+    </div>
+    <p v-else class="fine">暂无维度评分。</p>
   </section>
 
   <section class="neo-section neo-section-pink" aria-labelledby="verify-heading">
@@ -74,6 +119,88 @@ const verifyItems = computed(() => {
   const risks = String(props.report.qualification?.risks || '').split(/[；;。\n]+/).map(s => s.trim()).filter(Boolean)
   return [...risks, ...(props.report.verify || [])]
 })
+
+// ---------- 维度评分展示 ----------
+const LEVELS = [
+  { key: 'top', min: 4.5, label: '卓越' },
+  { key: 'strong', min: 4, label: '优秀' },
+  { key: 'good', min: 3, label: '良好' },
+  { key: 'fair', min: 2, label: '待提升' },
+  { key: 'weak', min: 0, label: '短板' },
+]
+
+function normScore(v) {
+  const n = Number(v)
+  return Number.isFinite(n) ? Math.max(0, Math.min(5, n)) : 0
+}
+function toList(v) {
+  if (Array.isArray(v)) return v.map(x => String(x).trim()).filter(Boolean)
+  return String(v || '').split(/[；;。\n]+/).map(s => s.trim()).filter(Boolean)
+}
+function levelOf(score) {
+  return LEVELS.find(l => score >= l.min) || LEVELS[LEVELS.length - 1]
+}
+function shortName(name) {
+  const s = String(name || '')
+  return s.length > 5 ? s.slice(0, 4) + '…' : s
+}
+
+const dims = computed(() => {
+  const list = Array.isArray(props.report.dimensions) ? props.report.dimensions : []
+  return list.map(d => {
+    const score = normScore(d.score_0_to_5)
+    const level = levelOf(score)
+    return {
+      name: String(d.name || '未命名维度'),
+      score: Number(score.toFixed(1)),
+      pct: Math.round(score / 5 * 100),
+      level,
+      evidence: toList(d.evidence),
+      gap: toList(d.gap),
+    }
+  })
+})
+
+const sortedDims = computed(() => [...dims.value].sort((a, b) => b.score - a.score))
+const avgScore = computed(() => {
+  if (!dims.value.length) return '0.0'
+  const s = dims.value.reduce((sum, d) => sum + d.score, 0) / dims.value.length
+  return Number(s.toFixed(1))
+})
+const fitPct = computed(() => {
+  if (!dims.value.length) return 0
+  return Math.round(dims.value.reduce((sum, d) => sum + d.score, 0) / dims.value.length / 5 * 100)
+})
+const strongCount = computed(() => dims.value.filter(d => d.score >= 4).length)
+const midCount = computed(() => dims.value.filter(d => d.score >= 3 && d.score < 4).length)
+const weakCount = computed(() => dims.value.filter(d => d.score < 3).length)
+const bestDim = computed(() => sortedDims.value[0] || null)
+const worstDim = computed(() => sortedDims.value.length > 1 ? sortedDims.value[sortedDims.value.length - 1] : null)
+
+const radar = computed(() => {
+  const list = sortedDims.value.slice(0, 8)
+  const n = list.length
+  if (n < 3) return null
+  const cx = 130, cy = 110, r = 78
+  const angle = i => (Math.PI * 2 * i) / n - Math.PI / 2
+  const pt = (i, k) => [cx + r * k * Math.cos(angle(i)), cy + r * k * Math.sin(angle(i))]
+  const fmt = v => Number(v.toFixed(2))
+  const rings = [1, 2, 3, 4, 5].map(k => list.map((_, i) => pt(i, k / 5).map(fmt).join(',')).join(' '))
+  const axes = list.map((_, i) => [...pt(i, 1).map(fmt), cx, cy])
+  const data = list.map((d, i) => pt(i, d.score / 5).map(fmt))
+  const labels = list.map((d, i) => {
+    const lr = 100
+    return [cx + lr * Math.cos(angle(i)), cy + lr * Math.sin(angle(i)) + 3, shortName(d.name)]
+  })
+  return {
+    rings,
+    axes,
+    points: data.map(v => v.join(',')).join(' '),
+    vertices: data,
+    labels,
+  }
+})
+
 
 async function copyUrl() {
   try {
