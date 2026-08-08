@@ -209,6 +209,22 @@ function parseAiModelBody(body, partial = false) {
   if ('enabled' in body) out.enabled = Boolean(body.enabled);
   if ('isDefault' in body) out.isDefault = Boolean(body.isDefault);
   if ('multimodal' in body) out.multimodal = Boolean(body.multimodal);
+  if ('apiKeyId' in body) out.apiKeyId = body.apiKeyId ? String(body.apiKeyId) : null;
+  return out;
+}
+function parseAiKeyBody(body, partial = false) {
+  const out = {};
+  if (!partial || 'name' in body) {
+    const name = String(body?.name || '').trim();
+    if (!name) return { error: '请填写 Key 名称。' };
+    if (name.length > 60) return { error: 'Key 名称过长。' };
+    out.name = name;
+  }
+  if ('provider' in body) out.provider = String(body.provider || '').trim().slice(0, 60) || null;
+  if ('baseUrl' in body) out.baseUrl = String(body.baseUrl || '').trim().replace(/\/+$/, '') || null;
+  if ('remark' in body) out.remark = String(body.remark || '').trim().slice(0, 300) || null;
+  if ('enabled' in body) out.enabled = Boolean(body.enabled);
+  if ('isDefault' in body) out.isDefault = Boolean(body.isDefault);
   return out;
 }
 
@@ -385,10 +401,6 @@ app.get('/api/admin/settings', requireAdmin, async (req, res) => {
       announcement: settings.announcement,
       free_quota: settings.free_quota,
       registration_enabled: settings.registration_enabled,
-      openai_api_key_masked: maskSecret(settings.openai_api_key),
-      openai_base_url: settings.openai_base_url || null,
-      openai_model: settings.openai_model || null,
-      openai_vision_model: settings.openai_vision_model || null,
       resend_api_key_masked: maskSecret(settings.resend_api_key),
       email_from: settings.email_from || null,
       updated_at: settings.updated_at,
@@ -396,10 +408,7 @@ app.get('/api/admin/settings', requireAdmin, async (req, res) => {
     admins: admins.map(publicAdmin),
     environment: {
       // 环境变量作为兜底配置，后台数据库配置优先
-      openaiEnvConfigured: Boolean(process.env.OPENAI_API_KEY),
       emailEnvConfigured: Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM),
-      model: process.env.OPENAI_MODEL || '未配置',
-      baseUrl: (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, ''),
     },
   });
 });
@@ -422,17 +431,6 @@ app.put('/api/admin/settings', express.json(), requireAdmin, async (req, res) =>
   if ('registrationEnabled' in req.body) {
     patch.registrationEnabled = Boolean(req.body.registrationEnabled);
   }
-
-  // AI 配置：留空或掩码值不覆盖已保存的密钥；显式清除才清空
-  const aiApiKey = String(req.body?.aiApiKey || '').trim();
-  if (aiApiKey && !isMasked(aiApiKey)) patch.openaiApiKey = aiApiKey;
-  if (req.body?.clearAiKey) patch.openaiApiKey = '';
-  const aiBaseUrl = String(req.body?.aiBaseUrl || '').trim().replace(/\/+$/, '');
-  const aiModel = String(req.body?.aiModel || '').trim();
-  const aiVisionModel = String(req.body?.aiVisionModel || '').trim();
-  if ('aiBaseUrl' in req.body) patch.openaiBaseUrl = aiBaseUrl || null;
-  if ('aiModel' in req.body) patch.openaiModel = aiModel || null;
-  if ('aiVisionModel' in req.body) patch.openaiVisionModel = aiVisionModel || null;
 
   // 邮件配置（Resend）：同上
   const resendApiKey = String(req.body?.resendApiKey || '').trim();
@@ -478,14 +476,91 @@ app.delete('/api/admin/admins/:id', requireAdmin, async (req, res) => {
   res.json({ ok: true, deleted: req.params.id });
 });
 
+// ===== API Key 池（官方 / 中转站等多套凭证，模型可绑定；is_default = 当前使用） =====
+app.get('/api/admin/ai-keys', requireAdmin, async (req, res) => {
+  const keys = await store.listAiKeys();
+  res.json({
+    keys: keys.map(k => ({
+      id: k.id,
+      name: k.name,
+      provider: k.provider,
+      baseUrl: k.baseUrl,
+      apiKeyMasked: maskSecret(k.apiKey),
+      enabled: k.enabled,
+      isDefault: k.isDefault,
+      remark: k.remark,
+      createdAt: k.createdAt,
+      updatedAt: k.updatedAt,
+    })),
+  });
+});
+
+app.post('/api/admin/ai-keys', express.json(), requireAdmin, async (req, res) => {
+  const apiKey = String(req.body?.apiKey || '').trim();
+  if (!apiKey) return res.status(400).json({ error: '请填写 API Key。' });
+  const parsed = parseAiKeyBody(req.body);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const key = await store.createAiKey({ id: crypto.randomUUID(), apiKey, ...parsed });
+  if (key.isDefault) {
+    const r = await store.setDefaultAiKey(key.id);
+    if (r.error) await store.updateAiKey(key.id, { isDefault: false });
+  }
+  res.json({ ok: true, key: { ...key, apiKeyMasked: maskSecret(key.apiKey) } });
+});
+
+app.put('/api/admin/ai-keys/:id', express.json(), requireAdmin, async (req, res) => {
+  const existing = await store.getAiKeyById(req.params.id);
+  if (!existing) return res.status(404).json({ error: '该 Key 不存在。' });
+  const parsed = parseAiKeyBody(req.body, true);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const apiKey = String(req.body?.apiKey || '').trim();
+  if (apiKey && !isMasked(apiKey)) parsed.apiKey = apiKey;
+  if (req.body?.clearKey) parsed.apiKey = '';
+  const { isDefault, ...rest } = parsed;
+  const key = (await store.updateAiKey(existing.id, rest)) || existing;
+  if (isDefault === true) {
+    const r = await store.setDefaultAiKey(key.id);
+    if (r.error) return res.status(400).json({ error: r.error });
+  } else if (isDefault === false && existing.isDefault) {
+    await store.clearDefaultAiKey(key.id);
+  }
+  res.json({ ok: true, key: { ...(await store.getAiKeyById(key.id)), apiKeyMasked: maskSecret(key.apiKey) } });
+});
+
+app.delete('/api/admin/ai-keys/:id', requireAdmin, async (req, res) => {
+  const existing = await store.getAiKeyById(req.params.id);
+  if (!existing) return res.status(404).json({ error: '该 Key 不存在。' });
+  await store.deleteAiKey(existing.id);
+  res.json({ ok: true, deleted: existing.id });
+});
+
+app.post('/api/admin/ai-keys/:id/default', requireAdmin, async (req, res) => {
+  const existing = await store.getAiKeyById(req.params.id);
+  if (!existing) return res.status(404).json({ error: '该 Key 不存在。' });
+  const result = await store.setDefaultAiKey(existing.id);
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.json({ ok: true, key: { ...(await store.getAiKeyById(existing.id)), apiKeyMasked: maskSecret(existing.apiKey) } });
+});
+
 // ===== AI 模型管理（人工维护为主，抓取价目仅作参考） =====
 app.get('/api/admin/ai-models', requireAdmin, async (req, res) => {
-  const models = await store.listAiModels();
+  const [models, keys] = await Promise.all([store.listAiModels(), store.listAiKeys()]);
+  const keyNameMap = new Map(keys.map(k => [k.id, k.name]));
+  const enriched = models.map(m => ({ ...m, apiKeyName: m.apiKeyId ? keyNameMap.get(m.apiKeyId) || null : null }));
   res.json({
-    models,
-    defaultTextId: models.find(m => m.modelType === 'text' && m.isDefault)?.id || null,
-    defaultMultimodalId: models.find(m => m.multimodal && m.isDefault)?.id || null,
-    defaultOcrId: models.find(m => m.modelType === 'ocr' && m.isDefault)?.id || null,
+    models: enriched,
+    keys: keys.map(k => ({
+      id: k.id,
+      name: k.name,
+      provider: k.provider,
+      baseUrl: k.baseUrl,
+      apiKeyMasked: maskSecret(k.apiKey),
+      enabled: k.enabled,
+      isDefault: k.isDefault,
+    })),
+    defaultTextId: enriched.find(m => m.modelType === 'text' && m.isDefault)?.id || null,
+    defaultMultimodalId: enriched.find(m => m.multimodal && m.isDefault)?.id || null,
+    defaultOcrId: enriched.find(m => m.modelType === 'ocr' && m.isDefault)?.id || null,
   });
 });
 

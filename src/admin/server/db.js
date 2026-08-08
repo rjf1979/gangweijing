@@ -26,10 +26,6 @@ CREATE TABLE IF NOT EXISTS admin_settings (
   announcement text NOT NULL DEFAULT '',
   free_quota integer NOT NULL DEFAULT 3,
   registration_enabled boolean NOT NULL DEFAULT true,
-  openai_api_key text,
-  openai_base_url text,
-  openai_model text,
-  openai_vision_model text,
   resend_api_key text,
   email_from text,
   updated_at timestamptz NOT NULL
@@ -37,10 +33,6 @@ CREATE TABLE IF NOT EXISTS admin_settings (
 INSERT INTO admin_settings (id, site_name, updated_at)
 VALUES (1, '岗位镜管理后台', now())
 ON CONFLICT (id) DO NOTHING;
-ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_api_key text;
-ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_base_url text;
-ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_model text;
-ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_vision_model text;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS resend_api_key text;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS email_from text;
 -- 自愈：历史编码问题可能导致默认站点名被写成问号/空，启动时自动重置为默认值（不覆盖用户后期修改）
@@ -68,6 +60,20 @@ ALTER TABLE ai_models ADD COLUMN IF NOT EXISTS multimodal boolean NOT NULL DEFAU
 ALTER TABLE ai_models ADD COLUMN IF NOT EXISTS also_ocr boolean NOT NULL DEFAULT false;
 UPDATE ai_models SET model_type = 'text', multimodal = true WHERE model_type = 'ocr' OR also_ocr = true;
 ALTER TABLE ai_models DROP COLUMN IF EXISTS also_ocr;
+ALTER TABLE ai_models ADD COLUMN IF NOT EXISTS api_key_id uuid;
+CREATE TABLE IF NOT EXISTS ai_keys (
+  id uuid PRIMARY KEY,
+  name text NOT NULL,
+  provider text,
+  base_url text,
+  api_key text NOT NULL,
+  enabled boolean NOT NULL DEFAULT true,
+  is_default boolean NOT NULL DEFAULT false,
+  remark text,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS ai_model_reference_prices (
   id uuid PRIMARY KEY,
   provider_key text NOT NULL,
@@ -111,7 +117,20 @@ const mapAiModel = row => row && ({
   contextWindow: row.context_window == null ? null : Number(row.context_window),
   enabled: Boolean(row.enabled),
   isDefault: Boolean(row.is_default),
+  apiKeyId: row.api_key_id || null,
   multimodal: Boolean(row.multimodal),
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+const mapAiKey = row => row && ({
+  id: row.id,
+  name: row.name,
+  provider: row.provider || null,
+  baseUrl: row.base_url || null,
+  apiKey: row.api_key || '',
+  enabled: Boolean(row.enabled),
+  isDefault: Boolean(row.is_default),
+  remark: row.remark || null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -178,7 +197,7 @@ export function createPgStore() {
 
     // ===== 站点设置 =====
     async getSettings() {
-      const { rows } = await pool.query('SELECT site_name, announcement, free_quota, registration_enabled, openai_api_key, openai_base_url, openai_model, openai_vision_model, resend_api_key, email_from, updated_at FROM admin_settings WHERE id = 1');
+      const { rows } = await pool.query('SELECT site_name, announcement, free_quota, registration_enabled, resend_api_key, email_from, updated_at FROM admin_settings WHERE id = 1');
       return rows[0] || null;
     },
     async updateSettings(patch = {}) {
@@ -189,10 +208,6 @@ export function createPgStore() {
       if ('announcement' in patch) push('announcement', patch.announcement);
       if ('freeQuota' in patch) push('free_quota', patch.freeQuota);
       if ('registrationEnabled' in patch) push('registration_enabled', Boolean(patch.registrationEnabled));
-      if ('openaiApiKey' in patch) push('openai_api_key', patch.openaiApiKey || null);
-      if ('openaiBaseUrl' in patch) push('openai_base_url', patch.openaiBaseUrl || null);
-      if ('openaiModel' in patch) push('openai_model', patch.openaiModel || null);
-      if ('openaiVisionModel' in patch) push('openai_vision_model', patch.openaiVisionModel || null);
       if ('resendApiKey' in patch) push('resend_api_key', patch.resendApiKey || null);
       if ('emailFrom' in patch) push('email_from', patch.emailFrom || null);
       if (!fields.length) return;
@@ -220,9 +235,9 @@ export function createPgStore() {
       const existing = await pool.query('SELECT 1 FROM ai_models WHERE provider = $1 AND model_id = $2', [input.provider, input.modelId]);
       if (existing.rows.length) return { conflict: true };
       const { rows } = await pool.query(
-        `INSERT INTO ai_models (id, provider, model_id, display_name, model_type, official_url, api_base_url, api_protocol, input_price, output_price, context_window, enabled, is_default, multimodal, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now(),now()) RETURNING *`,
-        [input.id, input.provider, input.modelId, input.displayName || null, input.modelType, input.officialUrl || null, input.apiBaseUrl || null, input.apiProtocol, input.inputPrice, input.outputPrice, input.contextWindow, Boolean(input.enabled !== false), Boolean(input.isDefault), Boolean(input.multimodal)]
+        `INSERT INTO ai_models (id, provider, model_id, display_name, model_type, official_url, api_base_url, api_protocol, input_price, output_price, context_window, enabled, is_default, multimodal, api_key_id, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now(),now()) RETURNING *`,
+        [input.id, input.provider, input.modelId, input.displayName || null, input.modelType, input.officialUrl || null, input.apiBaseUrl || null, input.apiProtocol, input.inputPrice, input.outputPrice, input.contextWindow, Boolean(input.enabled !== false), Boolean(input.isDefault), Boolean(input.multimodal), input.apiKeyId || null]
       );
       return { conflict: false, model: mapAiModel(rows[0]) };
     },
@@ -243,6 +258,7 @@ export function createPgStore() {
       if ('enabled' in input) push('enabled', Boolean(input.enabled));
       if ('isDefault' in input) push('is_default', Boolean(input.isDefault));
       if ('multimodal' in input) push('multimodal', Boolean(input.multimodal));
+      if ('apiKeyId' in input) push('api_key_id', input.apiKeyId || null);
       if (!fields.length) return null;
       values.push(id);
       const { rows } = await pool.query('UPDATE ai_models SET ' + fields.join(', ') + ', updated_at = now() WHERE id = $' + (fields.length + 1) + ' RETURNING *', values);
@@ -267,6 +283,62 @@ export function createPgStore() {
     },
     async clearDefaultAiModel(id) {
       await pool.query('UPDATE ai_models SET is_default = false, updated_at = now() WHERE id = $1', [id]);
+    },
+    // ===== API Key 池（官方 / 中转站等多套凭证，模型可按需绑定） =====
+    async listAiKeys() {
+      const { rows } = await pool.query('SELECT * FROM ai_keys ORDER BY is_default DESC, created_at');
+      return rows.map(mapAiKey);
+    },
+    async getAiKeyById(id) {
+      const { rows } = await pool.query('SELECT * FROM ai_keys WHERE id = $1', [id]);
+      return mapAiKey(rows[0] || null);
+    },
+    async getDefaultAiKey() {
+      const { rows } = await pool.query('SELECT * FROM ai_keys WHERE is_default = true AND enabled = true LIMIT 1');
+      return mapAiKey(rows[0] || null);
+    },
+    async createAiKey(input) {
+      const { rows } = await pool.query(
+        `INSERT INTO ai_keys (id, name, provider, base_url, api_key, enabled, is_default, remark, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),now()) RETURNING *`,
+        [input.id, input.name, input.provider || null, input.baseUrl || null, input.apiKey, Boolean(input.enabled !== false), Boolean(input.isDefault), input.remark || null]
+      );
+      return mapAiKey(rows[0]);
+    },
+    async updateAiKey(id, input) {
+      const fields = [];
+      const values = [];
+      const push = (col, val) => { fields.push(col + ' = $' + (fields.length + 1)); values.push(val); };
+      if ('name' in input) push('name', input.name);
+      if ('provider' in input) push('provider', input.provider || null);
+      if ('baseUrl' in input) push('base_url', input.baseUrl || null);
+      if ('apiKey' in input) push('api_key', input.apiKey);
+      if ('enabled' in input) push('enabled', Boolean(input.enabled));
+      if ('remark' in input) push('remark', input.remark || null);
+      if (!fields.length) return null;
+      values.push(id);
+      const { rows } = await pool.query('UPDATE ai_keys SET ' + fields.join(', ') + ', updated_at = now() WHERE id = $' + (fields.length + 1) + ' RETURNING *', values);
+      return mapAiKey(rows[0] || null);
+    },
+    async deleteAiKey(id) {
+      await pool.query('DELETE FROM ai_keys WHERE id = $1', [id]);
+      await pool.query('UPDATE ai_models SET api_key_id = NULL WHERE api_key_id = $1', [id]);
+    },
+    async setDefaultAiKey(id) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query('SELECT * FROM ai_keys WHERE id = $1', [id]);
+        if (!rows.length) { await client.query('ROLLBACK'); return { error: '该 Key 不存在。' }; }
+        if (!rows[0].enabled) { await client.query('ROLLBACK'); return { error: '请先启用该 Key，再设为当前使用。' }; }
+        await client.query('UPDATE ai_keys SET is_default = false, updated_at = now() WHERE is_default = true');
+        await client.query('UPDATE ai_keys SET is_default = true, updated_at = now() WHERE id = $1', [id]);
+        await client.query('COMMIT');
+        return { ok: true };
+      } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+    },
+    async clearDefaultAiKey(id) {
+      await pool.query('UPDATE ai_keys SET is_default = false, updated_at = now() WHERE id = $1', [id]);
     },
     // ===== 参考价目（OpenRouter 抓取结果落库，仅作填写参考，不写入正式 AI 配置） =====
     async listReferencePrices() {

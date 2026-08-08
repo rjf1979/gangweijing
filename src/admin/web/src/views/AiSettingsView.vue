@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="ai-settings">
     <div v-if="loading" class="card ai-loading" role="status">
       <div class="skeleton ai-skeleton"></div>
@@ -13,8 +13,8 @@
           <div class="ai-head-text">
             <h2 class="card-title">AI 模型库</h2>
             <p class="ai-desc">
-              维护用于简历文本分析与截图识别的大模型。公司、模型 ID、API 地址与价目以人工填写为准；
-              第三方参考价目只用于辅助填写，不会直接写入。
+              候选模型池 + 多套 API Key 配合：模型库维护可用大模型，每个模型可绑定官方或中转站的 Key；
+              「当前使用的 Key」与「默认模型」即当前生效组合。第三方参考价目仅辅助填写。
             </p>
           </div>
           <div class="ai-head-actions">
@@ -32,6 +32,14 @@
         <!-- 概览条 -->
         <div class="card-body ai-summary">
           <div class="summary-item">
+            <span class="summary-label">当前使用的 Key</span>
+            <span v-if="defaultKey" class="summary-value mono">
+              {{ defaultKey.name }}
+              <span v-if="defaultKey.baseUrl" class="summary-key-url" :title="defaultKey.baseUrl">{{ defaultKey.baseUrl }}</span>
+            </span>
+            <span v-else class="summary-value summary-empty">未设置（走系统设置兜底）</span>
+          </div>
+          <div class="summary-item">
             <span class="summary-label">默认文本模型</span>
             <span v-if="defaultText" class="summary-value mono">{{ defaultText.provider }} · {{ defaultText.modelId }}</span>
             <span v-else class="summary-value summary-empty">未设置</span>
@@ -44,11 +52,65 @@
             </span>
             <span v-else class="summary-value summary-empty">未设置</span>
           </div>
-          <div class="summary-item">
-            <span class="summary-label">已启用</span>
-            <span class="summary-value">{{ enabledCount }} / {{ models.length }}</span>
+        </div>
+      </section>
+
+      <!-- API Key 池 -->
+      <section class="card">
+        <div class="card-head">
+          <div class="ai-head-text">
+            <h3 class="card-title">API Key 池</h3>
+            <p class="ai-desc">
+              官方与中转站等多套凭证共存：每套 Key 自带 Base URL 与密钥，可分别「设为当前使用」；
+              模型在「绑定 API Key」中选择使用哪套，未绑定的模型跟随当前使用的 Key。
+            </p>
+          </div>
+          <div class="ai-head-actions">
+            <button class="btn btn-primary" type="button" @click="openKeyAdd">
+              <AppIcon name="plus" :size="15" /> 添加 Key
+            </button>
           </div>
         </div>
+
+        <div v-if="keys.length === 0" class="card-body empty-inline">
+          还没有配置任何 API Key。添加官方或中转站的 Key 后，才能在模型上绑定使用。
+        </div>
+
+        <ul v-else class="model-list">
+          <li v-for="key in keys" :key="key.id" class="model-row">
+            <div class="model-main">
+              <div class="model-title">
+                <span class="key-name">{{ key.name }}</span>
+                <span v-if="key.isDefault" class="badge badge-success">当前使用</span>
+                <span v-if="key.provider" class="provider-chip">{{ key.provider }}</span>
+                <span v-if="!key.enabled" class="badge badge-neutral">已停用</span>
+              </div>
+              <div class="model-meta">
+                <span v-if="key.baseUrl" class="meta-line" :title="key.baseUrl">
+                  <AppIcon name="link" :size="12" />{{ key.baseUrl }}
+                </span>
+                <span class="meta-line mono">{{ key.apiKeyMasked || '未配置密钥' }}</span>
+                <span class="meta-line">绑定模型 {{ boundModelCount(key.id) }} 个</span>
+                <span v-if="key.remark" class="meta-line">{{ key.remark }}</span>
+              </div>
+            </div>
+            <div class="model-actions">
+              <label class="switch" :title="key.enabled ? '点击停用' : '点击启用'">
+                <input type="checkbox" :checked="key.enabled" :aria-label="`启用 ${key.name}`" @change="toggleKeyEnabled(key, $event)" />
+                <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+              </label>
+              <button v-if="!key.isDefault" class="btn btn-ghost btn-sm" type="button" :disabled="keyBusy" @click="setDefaultKey(key)">
+                <AppIcon name="check-circle" :size="14" /> 设为当前使用
+              </button>
+              <button class="btn btn-ghost btn-sm icon-btn" type="button" :aria-label="`编辑 ${key.name}`" :title="`编辑 ${key.name}`" @click="openKeyEdit(key)">
+                <AppIcon name="edit" :size="14" />
+              </button>
+              <button class="btn btn-ghost btn-sm icon-btn" type="button" :aria-label="`删除 ${key.name}`" :title="`删除 ${key.name}`" @click="askDeleteKey(key)">
+                <AppIcon name="trash" :size="14" />
+              </button>
+            </div>
+          </li>
+        </ul>
       </section>
 
       <!-- 空态 -->
@@ -85,8 +147,11 @@
                 </div>
                 <div v-if="model.displayName" class="model-sub">{{ model.displayName }}</div>
                 <div class="model-meta">
-                  <span v-if="model.apiBaseUrl" class="meta-line" :title="model.apiBaseUrl">
-                    <AppIcon name="link" :size="12" />{{ model.apiBaseUrl }}
+                  <span v-if="model.apiKeyName" class="meta-line" :title="`绑定 Key：${model.apiKeyName}`">
+                    <AppIcon name="key" :size="12" />{{ model.apiKeyName }}
+                  </span>
+                  <span v-else-if="defaultKey" class="meta-line" :title="`跟随当前使用的 Key：${defaultKey.name}`">
+                    <AppIcon name="key" :size="12" />跟随 {{ defaultKey.name }}
                   </span>
                   <span v-if="model.contextWindow" class="meta-line">上下文 {{ formatNumber(model.contextWindow) }}</span>
                   <span class="meta-line">输入 {{ formatPrice(model.inputPrice) }} / 输出 {{ formatPrice(model.outputPrice) }} 美元·百万tokens</span>
@@ -132,7 +197,7 @@
                     <select id="model-provider" v-model="providerChoice" class="select" @change="onProviderChange">
                       <option v-for="p in providerOptions" :key="p.value" :value="p.value">{{ p.label }}</option>
                     </select>
-                    <p class="field-hint">选择知名厂商会带出该厂商的默认 API 地址与常见模型 ID 提示，也可以选「自定义厂商」手动填写。</p>
+                    <p class="field-hint">选择知名厂商会带出该厂商的常见模型 ID 提示，也可以选「自定义厂商」手动填写。</p>
                   </div>
 
                   <div v-if="providerChoice === '__custom__'" class="field field-span-2">
@@ -194,9 +259,12 @@
                   </div>
 
                   <div class="field field-span-2">
-                    <label class="field-label" for="model-base-url">API 地址（Base URL）</label>
-                    <input id="model-base-url" v-model.trim="form.apiBaseUrl" class="input" :placeholder="baseUrlPlaceholder" />
-                    <p class="field-hint">按接口协议拼接 /chat/completions 或 /responses 调用；留空表示不覆盖，沿用旧配置。</p>
+                    <label class="field-label" for="model-api-key">绑定 API Key</label>
+                    <select id="model-api-key" v-model="form.apiKeyId" class="select">
+                      <option :value="null">跟随当前使用的 Key（自动）</option>
+                      <option v-for="k in enabledKeys" :key="k.id" :value="k.id">{{ k.name }}{{ k.isDefault ? '（当前使用）' : '' }}</option>
+                    </select>
+                    <p class="field-hint">调用时优先使用该模型绑定的 Key；不绑定则使用「当前使用的 Key」。官方模型绑官方 Key，中转模型绑中转 Key。</p>
                   </div>
 
                 </div>
@@ -236,6 +304,82 @@
         </div>
       </Transition>
     </Teleport>
+    <!-- 添加 / 编辑 API Key 弹窗 -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <div v-if="keyFormOpen" class="modal-overlay" @click.self="closeKeyForm">
+          <div class="modal-panel" role="dialog" aria-modal="true" :aria-label="keyFormMode === 'edit' ? '编辑 API Key' : '添加 API Key'">
+            <form novalidate @submit.prevent="saveKey">
+              <div class="modal-head">
+                <span class="modal-icon is-primary" aria-hidden="true"><AppIcon name="key" :size="20" /></span>
+                <h3>{{ keyFormMode === 'edit' ? '编辑 API Key' : '添加 API Key' }}</h3>
+                <button class="modal-close" type="button" aria-label="关闭" @click="closeKeyForm"><AppIcon name="x" :size="16" /></button>
+              </div>
+              <div class="modal-body">
+                <div class="form-grid">
+                  <div class="field field-span-2">
+                    <label class="field-label" for="key-name">Key 名称</label>
+                    <input id="key-name" v-model.trim="keyForm.name" class="input" maxlength="60" placeholder="例如：DeepSeek 官方 / 中转站 A" required />
+                    <p class="field-hint">便于识别的名称，将显示在模型绑定与「当前生效配置」中。</p>
+                  </div>
+                  <div class="field field-span-2">
+                    <label class="field-label" for="key-provider">来源 / 厂商（可选）</label>
+                    <select id="key-provider" v-model="keyForm.providerChoice" class="select" @change="onKeyProviderChange">
+                      <option value="__none__">不填（通用中转）</option>
+                      <option v-for="p in meta.providers" :key="p.key" :value="p.key">{{ p.label }}</option>
+                      <option value="__custom__">自定义来源…</option>
+                    </select>
+                    <input v-if="keyForm.providerChoice === '__custom__'" v-model.trim="keyForm.provider" class="input mono-input" maxlength="60" placeholder="例如：某中转服务商" />
+                  </div>
+                  <div class="field field-span-2">
+                    <label class="field-label" for="key-api-key">API Key</label>
+                    <input id="key-api-key" v-model.trim="keyForm.apiKey" class="input mono-input" type="password" autocomplete="off" :placeholder="keyForm.apiKeyPlaceholder || 'sk-…（编辑时留空表示不修改）'" />
+                    <div class="field-inline">
+                      <p class="field-hint">密钥仅以掩码显示，不会回传明文。</p>
+                      <label class="switch">
+                        <input v-model="keyForm.clearKey" type="checkbox" />
+                        <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+                        <span class="switch-text">保存后清除密钥</span>
+                      </label>
+                    </div>
+                  </div>
+                  <div class="field field-span-2">
+                    <label class="field-label" for="key-base-url">Base URL</label>
+                    <input id="key-base-url" v-model.trim="keyForm.baseUrl" class="input mono-input" placeholder="https://api.example.com/v1" />
+                    <p class="field-hint">官方 Key 填官方地址，中转站 Key 填中转地址；模型未单独填 API 地址时使用此地址。</p>
+                  </div>
+                  <div class="field field-span-2">
+                    <label class="field-label" for="key-remark">备注（可选）</label>
+                    <input id="key-remark" v-model.trim="keyForm.remark" class="input" maxlength="300" placeholder="例如：余额 / 限流说明" />
+                  </div>
+                </div>
+                <div class="form-grid form-switches">
+                  <label class="switch">
+                    <input v-model="keyForm.enabled" type="checkbox" />
+                    <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+                    <span class="switch-text">启用该 Key</span>
+                  </label>
+                  <label class="switch">
+                    <input v-model="keyForm.isDefault" type="checkbox" />
+                    <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+                    <span class="switch-text">设为当前使用</span>
+                  </label>
+                </div>
+                <p class="field-hint">「当前使用」的 Key 是未绑定模型的默认凭证；同一时间只能有一个。</p>
+                <p v-if="keyFormError" class="field-error" role="alert">{{ keyFormError }}</p>
+              </div>
+              <div class="modal-foot">
+                <button class="btn" type="button" @click="closeKeyForm">取消</button>
+                <button class="btn btn-primary" type="submit" :disabled="savingKey">
+                  {{ savingKey ? '保存中…' : (keyFormMode === 'edit' ? '保存修改' : '添加 Key') }}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
     <!-- 参考价目弹窗 -->
     <Teleport to="body">
       <Transition name="modal">
@@ -327,6 +471,16 @@
       @close="deleteTarget = null"
       @confirm="confirmDelete"
     />
+
+    <ConfirmDialog
+      :open="keyDeleteTarget !== null"
+      title="删除 API Key"
+      :message="keyDeleteTarget ? `将删除「${keyDeleteTarget.name}」。绑定该 Key 的模型将自动改为跟随当前使用的 Key。` : ''"
+      confirm-text="确认删除"
+      :busy="deletingKey"
+      @close="keyDeleteTarget = null"
+      @confirm="confirmDeleteKey"
+    />
   </div>
 </template>
 <script setup>
@@ -339,6 +493,7 @@ import { toast } from '../store'
 const loading = ref(true)
 const error = ref('')
 const models = ref([])
+const keys = ref([])
 const meta = ref({
   providers: [],
   modelTypes: [{ value: 'text', label: '文本模型' }],
@@ -358,7 +513,6 @@ const form = reactive({
   modelType: 'text',
   modelId: '',
   displayName: '',
-  apiBaseUrl: '',
   officialUrl: '',
   apiProtocol: 'chat_completions',
   inputPrice: null,
@@ -367,6 +521,7 @@ const form = reactive({
   enabled: true,
   isDefault: false,
   multimodal: false,
+  apiKeyId: null,
 })
 const editingId = ref(null)
 const providerChoice = ref('')
@@ -383,6 +538,28 @@ const refKeyword = ref('')
 const deleteTarget = ref(null)
 const deleting = ref(false)
 
+// API Key 池
+const keyFormOpen = ref(false)
+const keyFormMode = ref('add')
+const savingKey = ref(false)
+const keyFormError = ref('')
+const keyEditingId = ref(null)
+const keyBusy = ref(false)
+const keyDeleteTarget = ref(null)
+const deletingKey = ref(false)
+const keyForm = reactive({
+  name: '',
+  providerChoice: '__none__',
+  provider: '',
+  apiKey: '',
+  apiKeyPlaceholder: '',
+  baseUrl: '',
+  remark: '',
+  enabled: true,
+  isDefault: false,
+  clearKey: false,
+})
+
 const groups = computed(() => [
   { type: 'all', label: '全部模型', items: models.value },
 ])
@@ -394,7 +571,8 @@ const screenshotModel = computed(() => {
   if (def) return def
   return models.value.find(m => m.multimodal && m.enabled) || null
 })
-const enabledCount = computed(() => models.value.filter(m => m.enabled).length)
+const defaultKey = computed(() => keys.value.find(k => k.isDefault) || null)
+const enabledKeys = computed(() => keys.value.filter(k => k.enabled))
 
 const providerOptions = computed(() => [
   ...meta.value.providers.map(p => ({ value: p.key, label: p.label })),
@@ -405,7 +583,6 @@ const providerKey = computed(() => {
   const hit = meta.value.providers.find(p => p.label === form.provider)
   return hit ? hit.key : ''
 })
-const baseUrlPlaceholder = computed(() => providerKey.value ? (meta.value.providerDefaults[providerKey.value]?.apiBaseUrl || 'https://…/v1') : 'https://…/v1')
 const officialUrlPlaceholder = computed(() => providerKey.value ? (meta.value.providerDefaults[providerKey.value]?.officialUrl || 'https://…') : 'https://…')
 const suggestionKind = computed(() => (form.multimodal ? 'multimodal' : 'text'))
 const modelIdPlaceholder = computed(() => {
@@ -444,7 +621,6 @@ function resetForm() {
   form.modelType = 'text'
   form.modelId = ''
   form.displayName = ''
-  form.apiBaseUrl = ''
   form.officialUrl = ''
   form.apiProtocol = 'chat_completions'
   form.inputPrice = null
@@ -453,6 +629,7 @@ function resetForm() {
   form.enabled = true
   form.isDefault = false
   form.multimodal = false
+  form.apiKeyId = null
   providerChoice.value = ''
   editingId.value = null
   formError.value = ''
@@ -462,8 +639,9 @@ async function loadAll() {
   loading.value = true
   error.value = ''
   try {
-    const [list, metaData] = await Promise.all([api.get('/ai-models'), api.get('/ai-models/meta')])
+    const [list, metaData, keyData] = await Promise.all([api.get('/ai-models'), api.get('/ai-models/meta'), api.get('/ai-keys')])
     models.value = list.models || []
+    keys.value = keyData.keys || []
     meta.value = { ...meta.value, ...metaData }
   } catch (err) {
     error.value = err.message || '加载 AI 模型失败。'
@@ -473,8 +651,9 @@ async function loadAll() {
 }
 
 async function reloadModels() {
-  const list = await api.get('/ai-models')
+  const [list, keyData] = await Promise.all([api.get('/ai-models'), api.get('/ai-keys')])
   models.value = list.models || []
+  keys.value = keyData.keys || []
 }
 
 function openAdd() {
@@ -491,7 +670,6 @@ function openEdit(model) {
   form.modelType = model.modelType
   form.modelId = model.modelId
   form.displayName = model.displayName || ''
-  form.apiBaseUrl = model.apiBaseUrl || ''
   form.officialUrl = model.officialUrl || ''
   form.apiProtocol = model.apiProtocol || 'chat_completions'
   form.inputPrice = model.inputPrice
@@ -500,6 +678,7 @@ function openEdit(model) {
   form.enabled = model.enabled
   form.isDefault = model.isDefault
   form.multimodal = Boolean(model.multimodal)
+  form.apiKeyId = model.apiKeyId || null
   const hit = meta.value.providers.find(p => p.label === model.provider)
   providerChoice.value = hit ? hit.key : '__custom__'
   formOpen.value = true
@@ -514,12 +693,7 @@ function onProviderChange() {
   if (providerChoice.value === '__custom__') return
   const p = meta.value.providers.find(x => x.key === providerChoice.value)
   if (!p) return
-  const prevKey = meta.value.providers.find(x => x.label === form.provider)?.key || ''
   form.provider = p.label
-  if (!form.apiBaseUrl || (prevKey && form.apiBaseUrl === meta.value.providerDefaults[prevKey]?.apiBaseUrl)) {
-    const def = meta.value.providerDefaults[p.key]?.apiBaseUrl
-    if (def) form.apiBaseUrl = def
-  }
 }
 
 async function saveModel() {
@@ -533,7 +707,6 @@ async function saveModel() {
     modelType: form.modelType,
     modelId,
     displayName: form.displayName,
-    apiBaseUrl: form.apiBaseUrl,
     officialUrl: form.officialUrl,
     apiProtocol: form.apiProtocol,
     inputPrice: form.inputPrice,
@@ -542,6 +715,7 @@ async function saveModel() {
     enabled: form.enabled,
     isDefault: form.isDefault,
     multimodal: form.multimodal,
+    apiKeyId: form.apiKeyId,
   }
   saving.value = true
   try {
@@ -606,6 +780,137 @@ async function confirmDelete() {
   }
 }
 
+function resetKeyForm() {
+  keyForm.name = ''
+  keyForm.providerChoice = '__none__'
+  keyForm.provider = ''
+  keyForm.apiKey = ''
+  keyForm.apiKeyPlaceholder = ''
+  keyForm.baseUrl = ''
+  keyForm.remark = ''
+  keyForm.enabled = true
+  keyForm.isDefault = false
+  keyForm.clearKey = false
+  keyEditingId.value = null
+  keyFormError.value = ''
+}
+function openKeyAdd() {
+  resetKeyForm()
+  keyFormMode.value = 'add'
+  keyFormOpen.value = true
+}
+function openKeyEdit(key) {
+  resetKeyForm()
+  keyFormMode.value = 'edit'
+  keyEditingId.value = key.id
+  keyForm.name = key.name
+  keyForm.apiKeyPlaceholder = key.apiKeyMasked || ''
+  keyForm.baseUrl = key.baseUrl || ''
+  keyForm.remark = key.remark || ''
+  keyForm.enabled = key.enabled
+  keyForm.isDefault = key.isDefault
+  const hit = meta.value.providers.find(p => p.label === key.provider)
+  keyForm.providerChoice = hit ? hit.key : (key.provider ? '__custom__' : '__none__')
+  keyForm.provider = key.provider || ''
+  keyFormOpen.value = true
+}
+function closeKeyForm() {
+  keyFormOpen.value = false
+  keyFormError.value = ''
+}
+function onKeyProviderChange() {
+  if (keyForm.providerChoice === '__custom__') {
+    if (!keyForm.provider) keyForm.provider = '自定义'
+    return
+  }
+  if (keyForm.providerChoice === '__none__') {
+    keyForm.provider = ''
+    return
+  }
+  const p = meta.value.providers.find(x => x.key === keyForm.providerChoice)
+  keyForm.provider = p ? p.label : ''
+  if (!keyForm.baseUrl) {
+    const def = meta.value.providerDefaults[keyForm.providerChoice]?.apiBaseUrl
+    if (def) keyForm.baseUrl = def
+  }
+}
+async function saveKey() {
+  keyFormError.value = ''
+  const name = keyForm.name.trim()
+  if (!name) { keyFormError.value = '请填写 Key 名称。'; return }
+  const payload = {
+    name,
+    provider: keyForm.provider || '',
+    apiKey: keyForm.apiKey,
+    baseUrl: keyForm.baseUrl,
+    remark: keyForm.remark,
+    enabled: keyForm.enabled,
+    isDefault: keyForm.isDefault,
+    clearKey: keyForm.clearKey,
+  }
+  savingKey.value = true
+  try {
+    if (keyFormMode.value === 'edit' && keyEditingId.value) {
+      await api.put(`/ai-keys/${keyEditingId.value}`, payload)
+      toast('Key 已更新', 'success')
+    } else {
+      await api.post('/ai-keys', payload)
+      toast('Key 已添加', 'success')
+    }
+    closeKeyForm()
+    await reloadModels()
+  } catch (err) {
+    keyFormError.value = err.message || '保存失败。'
+  } finally {
+    savingKey.value = false
+  }
+}
+async function toggleKeyEnabled(key, event) {
+  const next = event.target.checked
+  try {
+    await api.put(`/ai-keys/${key.id}`, { enabled: next })
+    key.enabled = next
+    toast(next ? 'Key 已启用' : 'Key 已停用', 'success')
+  } catch (err) {
+    toast(err.message || '操作失败', 'error')
+    event.target.checked = !next
+  }
+}
+async function setDefaultKey(key) {
+  keyBusy.value = true
+  try {
+    await api.post(`/ai-keys/${key.id}/default`)
+    toast('已设为当前使用的 Key', 'success')
+    await reloadModels()
+  } catch (err) {
+    toast(err.message || '操作失败', 'error')
+  } finally {
+    keyBusy.value = false
+  }
+}
+function askDeleteKey(key) {
+  keyDeleteTarget.value = key
+}
+async function confirmDeleteKey() {
+  const target = keyDeleteTarget.value
+  if (!target) return
+  deletingKey.value = true
+  try {
+    await api.delete(`/ai-keys/${target.id}`)
+    toast('Key 已删除', 'success')
+    keyDeleteTarget.value = null
+    await reloadModels()
+  } catch (err) {
+    toast(err.message || '删除失败', 'error')
+    keyDeleteTarget.value = null
+  } finally {
+    deletingKey.value = false
+  }
+}
+function boundModelCount(keyId) {
+  return models.value.filter(m => m.apiKeyId === keyId).length
+}
+
 function openReference() {
   refOpen.value = true
   if (!refData.value) loadReference()
@@ -648,11 +953,7 @@ function fillFromReference(ref) {
   form.outputPrice = ref.outputPrice
   form.contextWindow = ref.contextLength
   const p = meta.value.providers.find(x => x.label === ref.provider)
-  if (p) {
-    providerChoice.value = p.key
-    const def = meta.value.providerDefaults[p.key]?.apiBaseUrl
-    if (def) form.apiBaseUrl = def
-  }
+  if (p) providerChoice.value = p.key
   refOpen.value = false
   formOpen.value = true
   toast('已按参考数据填入表单，请核对后保存', 'success')
@@ -1118,5 +1419,29 @@ onMounted(loadAll)
   padding: 32px 0;
   text-align: center;
   color: var(--color-text-muted);
+}
+/* Key 池 */
+.key-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--color-text);
+}
+.key-name + .badge,
+.key-name + .provider-chip {
+  margin-left: 8px;
+}
+.summary-key-url {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+.meta-line .app-icon {
+  margin-right: 4px;
 }
 </style>

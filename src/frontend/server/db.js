@@ -57,10 +57,6 @@ CREATE TABLE IF NOT EXISTS admin_settings (
   announcement text NOT NULL DEFAULT '',
   free_quota integer NOT NULL DEFAULT 3,
   registration_enabled boolean NOT NULL DEFAULT true,
-  openai_api_key text,
-  openai_base_url text,
-  openai_model text,
-  openai_vision_model text,
   resend_api_key text,
   email_from text,
   updated_at timestamptz NOT NULL
@@ -68,10 +64,6 @@ CREATE TABLE IF NOT EXISTS admin_settings (
 INSERT INTO admin_settings (id, site_name, updated_at)
 VALUES (1, '岗位镜管理后台', now())
 ON CONFLICT (id) DO NOTHING;
-ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_api_key text;
-ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_base_url text;
-ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_model text;
-ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS openai_vision_model text;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS resend_api_key text;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS email_from text;
 CREATE TABLE IF NOT EXISTS ai_models (
@@ -98,6 +90,20 @@ ALTER TABLE ai_models ADD COLUMN IF NOT EXISTS multimodal boolean NOT NULL DEFAU
 ALTER TABLE ai_models ADD COLUMN IF NOT EXISTS also_ocr boolean NOT NULL DEFAULT false;
 UPDATE ai_models SET model_type = 'text', multimodal = true WHERE model_type = 'ocr' OR also_ocr = true;
 ALTER TABLE ai_models DROP COLUMN IF EXISTS also_ocr;
+ALTER TABLE ai_models ADD COLUMN IF NOT EXISTS api_key_id uuid;
+CREATE TABLE IF NOT EXISTS ai_keys (
+  id uuid PRIMARY KEY,
+  name text NOT NULL,
+  provider text,
+  base_url text,
+  api_key text NOT NULL,
+  enabled boolean NOT NULL DEFAULT true,
+  is_default boolean NOT NULL DEFAULT false,
+  remark text,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL
+);
+
 `;
 
 function selectedUrl() {
@@ -119,6 +125,7 @@ const mapAiModel = row => row && ({
   contextWindow: row.context_window == null ? null : Number(row.context_window),
   enabled: Boolean(row.enabled),
   isDefault: Boolean(row.is_default),
+  apiKeyId: row.api_key_id || null,
   multimodal: Boolean(row.multimodal),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -171,8 +178,16 @@ export function createPgStore() {
       const { rows } = await pool.query('SELECT * FROM ai_models WHERE LOWER(model_id) = LOWER($1) ORDER BY is_default DESC LIMIT 1', [String(modelId || '')]);
       return mapAiModel(rows[0] || null);
     },
+    async getAiKeyById(id) {
+      const { rows } = await pool.query('SELECT * FROM ai_keys WHERE id = $1', [id]);
+      return rows[0] || null;
+    },
+    async getDefaultAiKey() {
+      const { rows } = await pool.query('SELECT * FROM ai_keys WHERE is_default = true AND enabled = true LIMIT 1');
+      return rows[0] || null;
+    },
     async getAppSettings() {
-      const { rows } = await pool.query('SELECT site_name, openai_api_key, openai_base_url, openai_model, openai_vision_model, resend_api_key, email_from FROM admin_settings WHERE id = 1');
+      const { rows } = await pool.query('SELECT site_name, resend_api_key, email_from FROM admin_settings WHERE id = 1');
       return rows[0] || null;
     }
   };
