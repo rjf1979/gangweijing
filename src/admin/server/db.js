@@ -21,6 +21,7 @@ ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_file_size integer;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_file_path text;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_file_uploaded_at timestamptz;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_masked_fields jsonb;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS facts_confirmed_at timestamptz;
 CREATE TABLE IF NOT EXISTS admin_settings (
   id integer PRIMARY KEY DEFAULT 1,
   site_name text NOT NULL DEFAULT '岗位镜管理后台',

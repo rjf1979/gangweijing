@@ -42,7 +42,7 @@ export default {
       if (!text) { this.errorText = '简历内容不能为空。'; return }
       this.saving = true
       try {
-        await api.put('/api/resume', { text: text })
+        await api.put('/api/resume', { text: text, facts: true })
         uni.setStorageSync('resumeDraft', text)
         uni.showToast({ title: '已保存', icon: 'success' })
         setTimeout(() => uni.navigateTo({ url: '/pages/job/index' }), 500)

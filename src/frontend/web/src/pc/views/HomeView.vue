@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <section class="home-dashboard" aria-labelledby="home-title">
     <article class="home-hero neo-panel">
       <p class="section-kicker">YOUR WORKSPACE</p>
@@ -17,7 +17,7 @@
       <div class="home-section-heading"><div><p class="section-kicker">CURRENT PATH</p><h2 id="progress-title">分析进度</h2></div></div>
       <ol class="home-progress">
         <li :class="{ complete: resumeReady }"><b>01</b><span>简历</span><small>{{ resumeReady ? '已准备' : '待完成' }}</small></li>
-        <li :class="{ complete: resumeReady }"><b>02</b><span>事实确认</span><small>{{ resumeReady ? '下一步' : '等待简历' }}</small></li>
+        <li :class="{ complete: factsConfirmed }"><b>02</b><span>事实确认</span><small>{{ factsConfirmed ? '已完成' : (resumeReady ? '待确认' : '等待简历') }}</small></li>
         <li :class="{ complete: hasJobs }"><b>03</b><span>目标岗位</span><small>{{ hasJobs ? '已完成' : '待完成' }}</small></li>
         <li :class="{ complete: hasReports }"><b>04</b><span>分析报告</span><small>{{ hasReports ? '已生成' : '待生成' }}</small></li>
       </ol>
@@ -62,6 +62,7 @@ import { saveDraft, store } from '../store'
 const reports = ref([])
 const stats = ref({ jobs: 0, reports: 0 })
 const resumeReady = ref(Boolean(store.draft.resumeText))
+const factsConfirmed = ref(false)
 const loading = ref(true)
 const loadError = ref('')
 
@@ -72,9 +73,11 @@ const displayName = computed(() => {
   const name = String(store.user?.email || '').split('@')[0] || '你'
   return name.length > 8 ? `${name.slice(0, 8)}...` : name
 })
-const nextAction = computed(() => resumeReady.value
-  ? { title: '继续岗位分析', description: '确认简历事实后，录入目标岗位并生成报告。', label: '继续分析', to: '/facts' }
-  : { title: '先准备你的简历', description: '上传文件或粘贴简历文本，开始建立分析基础。', label: '上传简历', to: '/resume' })
+const nextAction = computed(() => {
+  if (!resumeReady.value) return { title: '先准备你的简历', description: '上传文件或粘贴简历文本，开始建立分析基础。', label: '上传简历', to: '/resume' }
+  if (!factsConfirmed.value) return { title: '确认简历事实', description: '核对简历中的职业事实，确保 AI 分析基于真实信息。', label: '确认事实', to: '/facts' }
+  return { title: '录入目标岗位', description: '填写目标岗位信息，生成 AI 匹配分析报告。', label: '录入岗位', to: '/job' }
+})
 
 function formatDate(value) {
   if (!value) return ''
@@ -85,6 +88,7 @@ onMounted(async () => {
   try {
     const [resume, reportData] = await Promise.all([api.get('/api/resume'), api.get('/api/reports')])
     resumeReady.value = Boolean(resume.hasResume)
+    factsConfirmed.value = Boolean(resume.factsConfirmed)
     if (resume.text) saveDraft({ resumeText: resume.text, facts: store.draft.facts || resume.text })
     reports.value = (reportData.reports || []).slice(0, 3)
     const total = (reportData.reports || []).length
