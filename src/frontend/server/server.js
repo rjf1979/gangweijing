@@ -5,6 +5,7 @@ import express from 'express';
 import multer from 'multer';
 import mammoth from 'mammoth';
 import { PDFParse } from 'pdf-parse';
+import { pdf as pdfToImages } from 'pdf-to-img';
 import { createPgStore } from './db.js';
 
 const app = express();
@@ -296,6 +297,10 @@ app.put('/api/resume', async (req, res) => {
   // 隐私脱敏：保存前对手机号、邮箱、证件号等敏感信息打码，库中只存脱敏文本，AI 分析也只看到脱敏内容
   const maskedText = maskResumePII(text);
   const fileRef = String(req.body?.fileRef || '');
+  // OCR 识别（/api/extract/resume 返回）结果：用户未编辑文本时随保存提交，避免二次文本模型解析
+  const providedStructured = req.body?.structured && typeof req.body.structured === 'object' && !Array.isArray(req.body.structured) ? req.body.structured : null;
+  const providedUsage = req.body?.usage && typeof req.body.usage === 'object' ? req.body.usage : null;
+  const providedModel = String(req.body?.model || '');
   const factsConfirmed = req.body?.facts === true;
   const db = await readDb();
   const user = currentUser(req, db);
@@ -333,14 +338,16 @@ app.put('/api/resume', async (req, res) => {
   }
   if (resumeTextChanged || !user.resumeStructured) {
     try {
-      const result = await structureResume(maskedText);
-      // 结构化字段兜底脱敏（防止 AI 从上下文中还原出真实联系方式）
-      if (result.structured?.basic) {
-        if (typeof result.structured.basic.phone === 'string') result.structured.basic.phone = maskResumePII(result.structured.basic.phone);
-        if (typeof result.structured.basic.email === 'string') result.structured.basic.email = maskResumePII(result.structured.basic.email);
+      let result;
+      const hasShape = providedStructured && (providedStructured.basic || providedStructured.education || providedStructured.work_experience || providedStructured.skills);
+      if (hasShape) {
+        result = { structured: providedStructured, usage: providedUsage, model: providedModel };
+      } else {
+        result = await structureResume(maskedText);
       }
-      user.resumeStructured = result.structured;
-      user.resumeStructuredUsage = result.usage;
+      // 结构化字段兜底脱敏（OCR 直接读到真实信息 → 全字段递归打码；文本模型输入已脱敏，幂等无副作用）
+      user.resumeStructured = maskStructuredPII(result.structured);
+      user.resumeStructuredUsage = result.usage || null;
       user.resumeStructuredAt = new Date().toISOString();
     } catch (error) {
       if (resumeTextChanged) { user.resumeStructured = null; user.resumeStructuredUsage = null; user.resumeStructuredAt = null; }
@@ -350,23 +357,102 @@ app.put('/api/resume', async (req, res) => {
   await saveDb(db);
   res.json({ saved: true, masked: true, maskedFields: user.resumeMaskedFields || [], hasResumeFile: Boolean(user.resumeFilePath), structured: Boolean(user.resumeStructured), structuredError });
 });
-async function extractResume(file) {
-  if (file.mimetype === 'application/pdf') { const parser = new PDFParse({ data: await fs.readFile(file.path) }); const result = await parser.getText(); await parser.destroy(); return result.text; }
-  if (file.mimetype.includes('wordprocessingml')) return (await mammoth.extractRawText({ path: file.path })).value;
-  throw new Error('仅支持 PDF 或 DOCX 简历。');
+// ---------- 简历 OCR 识别（多模态模型直接读取页面图片，识别版式结构） ----------
+const RESUME_STRUCTURE_SCHEMA = `{schema_version:1,basic:{name,gender,birth_year,phone,email,location,current_company,current_title,years_of_experience,expected_salary,job_intention,available_date},education:[{school,degree,major,start_date,end_date,gpa,honors:[]}],work_experience:[{company,title,start_date,end_date,industry,responsibilities:[],achievements:[],skills_used:[]}],project_experience:[{name,role,start_date,end_date,description,achievements:[],tech_stack:[]}],skills:{technical:[],tools:[],soft:[],languages:[]},certificates:[],awards:[],self_evaluation,summary,warnings:[]}`;
+const RESUME_OCR_PROMPT = `你是资深中文简历解析专家，正在 OCR 识别候选人上传的简历页面图片（多页按阅读顺序排列）。
+输出严格 JSON（不要输出任何多余文字或代码块标记）：{"text":"完整保留简历文本与版式结构，段落/条目前保留原始标题行（如「个人摘要」「工作经历」「技能特长」），保持阅读顺序，不遗漏真实信息","structured":${RESUME_STRUCTURE_SCHEMA},"warnings":[]}
+结构化要求：只提取简历中真实存在的信息，绝不编造或推测；无法确定的内容留空字符串或空数组，不要输出 null；日期统一为 "YYYY-MM" 或 "YYYY" 或 ""；工作经历按时间倒序；responsibilities 与 achievements 各用数组，每项一句话并保留量化数据；skills.technical 是技术栈/框架/编程语言，tools 是工具软件，soft 是软技能，languages 是语言能力；years_of_experience、birth_year 用数字，无法确定时输出 null。`;
+const MAX_OCR_PAGES = 6;
+// 把 PDF 渲染成页面 PNG（最多 MAX_OCR_PAGES 页）；图片直接使用；DOCX 不支持返回 null
+async function renderResumePageBuffers(filePath, mimetype) {
+  if (mimetype.startsWith('image/')) return [await fs.readFile(filePath)];
+  if (mimetype === 'application/pdf') {
+    const pages = [];
+    const doc = await pdfToImages(filePath, { scale: 1.6 });
+    try {
+      for await (const page of doc) {
+        pages.push(Buffer.from(page));
+        if (pages.length >= MAX_OCR_PAGES) break;
+      }
+    } finally { await doc.destroy().catch(() => {}); }
+    if (!pages.length) throw new Error('PDF 页面渲染为空。');
+    return pages;
+  }
+  return null;
+}
+// OCR 识别简历：多模态模型读取页面图片，返回 text + structured + usage
+async function ocrResume(filePath, mimetype) {
+  await refreshAppConfig();
+  const activeOcr = await resolveAiModel('ocr');
+  const credential = await resolveAiCredential(activeOcr);
+  if (!credential.apiKey) throw new Error('尚未配置 AI 接口，无法 OCR 识别简历。');
+  const pages = await renderResumePageBuffers(filePath, mimetype);
+  if (!pages) throw new Error('该文件类型不支持 OCR 识别。');
+  const images = pages.map(buf => `data:image/png;base64,${buf.toString('base64')}`);
+  const callOpts = { timeoutMs: 120000, ...(credential.apiKey ? { apiKey: credential.apiKey, ...(credential.baseUrl ? { baseUrl: credential.baseUrl } : {}) } : {}) };
+  let payload;
+  if (activeOcr?.apiProtocol === 'responses') {
+    payload = await callResponses({ model: activeOcr.modelId, input: [{ role: 'user', content: [{ type: 'input_text', text: RESUME_OCR_PROMPT }, ...images.map(image_url => ({ type: 'input_image', image_url }))] }], temperature: 0.1, text: { format: { type: 'json_object' } } }, callOpts);
+  } else if (activeOcr) {
+    payload = await callChatCompletions({ model: activeOcr.modelId, messages: [{ role: 'user', content: [{ type: 'text', text: RESUME_OCR_PROMPT }, ...images.map(image_url => ({ type: 'image_url', image_url: { url: image_url } }))] }], temperature: 0.1, response_format: { type: 'json_object' } }, callOpts);
+  } else {
+    payload = await callResponses({ model: process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: RESUME_OCR_PROMPT }, ...images.map(image_url => ({ type: 'input_image', image_url }))] }], temperature: 0.1, text: { format: { type: 'json_object' } } }, callOpts);
+  }
+  const model = activeOcr?.modelId || process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL;
+  const parsed = parseJsonText(extractText(payload));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('OCR 返回数据无法解析，请稍后重试。');
+  const structured = parsed.structured && typeof parsed.structured === 'object' && !Array.isArray(parsed.structured) ? parsed.structured : null;
+  const text = String(parsed.text || '').trim();
+  if (!text && !structured) throw new Error('OCR 未能识别出简历内容，请稍后重试。');
+  const usage = extractUsage(payload, model);
+  const cost = await computeReportCost(usage);
+  return { text, structured, usage: usage ? { ...usage, costSource: cost.source, currency: cost.currency } : null, cost, model, warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [] };
+}
+// 结构化数据全字段递归脱敏（OCR 直接读到真实信息，库中必须保持脱敏）
+function maskStructuredPII(value) {
+  if (typeof value === 'string') return maskResumePII(value);
+  if (Array.isArray(value)) return value.map(maskStructuredPII);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value)) out[k] = maskStructuredPII(value[k]);
+    return out;
+  }
+  return value;
+}
+async function extractResume({ mimetype, path: filePath }) {
+  if (mimetype === 'application/pdf') { const parser = new PDFParse({ data: await fs.readFile(filePath) }); const result = await parser.getText(); await parser.destroy(); return result.text; }
+  if (mimetype.includes('wordprocessingml')) return (await mammoth.extractRawText({ path: filePath })).value;
+  throw new Error('仅支持 PDF、DOCX 或图片简历。');
 }
 app.post('/api/extract/resume', upload.single('resume'), async (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: '请选择要上传的简历文件。' });
+  const fileRef = crypto.randomUUID();
+  const stagingPath = path.join(resumeStagingDir, fileRef);
+  let staged = false;
   try {
-    const text = await extractResume(file);
-    const fileRef = crypto.randomUUID();
+    const mimetype = String(file.mimetype || '').toLowerCase();
     // 保留原始文件到暂存区，等保存简历时归档到用户目录（原始文件名仅存库，磁盘用 UUID 命名）
-    await fs.rename(file.path, path.join(resumeStagingDir, fileRef)).catch(async () => { await fs.copyFile(file.path, path.join(resumeStagingDir, fileRef)); await fs.unlink(file.path).catch(() => {}); });
-    await fs.writeFile(path.join(resumeStagingDir, fileRef + '.meta.json'), JSON.stringify({ name: normalizeResumeFileName(file.originalname) || 'resume', mime: file.mimetype || 'application/octet-stream', size: file.size || 0 }));
-    res.json({ text, fileRef });
+    await fs.rename(file.path, stagingPath).catch(async () => { await fs.copyFile(file.path, stagingPath); await fs.unlink(file.path).catch(() => {}); });
+    staged = true;
+    await fs.writeFile(stagingPath + '.meta.json', JSON.stringify({ name: normalizeResumeFileName(file.originalname) || 'resume', mime: mimetype || 'application/octet-stream', size: file.size || 0 }));
+    // OCR 模式：PDF/图片 → 多模态模型识别版式结构（结构化 + 文本）
+    const isOcrCandidate = mimetype === 'application/pdf' || mimetype.startsWith('image/');
+    if (isOcrCandidate) {
+      try {
+        const ocr = await ocrResume(stagingPath, mimetype);
+        return res.json({ text: ocr.text, structured: ocr.structured || undefined, fileRef, mode: 'ocr', usage: ocr.usage || null, costUsd: ocr.cost?.value ?? null, costSource: ocr.cost?.source ?? null, model: ocr.model, warnings: ocr.warnings || [] });
+      } catch (error) {
+        if (mimetype.startsWith('image/')) { await fs.unlink(stagingPath).catch(() => {}); await fs.unlink(stagingPath + '.meta.json').catch(() => {}); return res.status(502).json({ error: `AI OCR 识别简历失败：${error.message}` }); }
+        // PDF OCR 失败：回退文本提取
+      }
+    }
+    const text = await extractResume({ mimetype, path: stagingPath });
+    if (!String(text || '').trim()) throw new Error('未能从文件中提取到文本，请确认文件未加密或尝试上传清晰的 PDF/图片。');
+    res.json({ text, fileRef, mode: 'text' });
   } catch (error) {
-    await fs.unlink(file.path).catch(() => {});
+    if (staged) { await fs.unlink(stagingPath).catch(() => {}); await fs.unlink(stagingPath + '.meta.json').catch(() => {}); }
+    else await fs.unlink(file.path).catch(() => {});
     res.status(400).json({ error: error.message });
   }
 });
