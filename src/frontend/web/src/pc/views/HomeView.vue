@@ -18,9 +18,19 @@
       <ol class="home-progress">
         <li :class="{ complete: resumeReady }"><b>01</b><span>简历</span><small>{{ resumeReady ? '已准备' : '待完成' }}</small></li>
         <li :class="{ complete: resumeReady }"><b>02</b><span>事实确认</span><small>{{ resumeReady ? '下一步' : '等待简历' }}</small></li>
-        <li><b>03</b><span>目标岗位</span><small>待完成</small></li>
-        <li><b>04</b><span>分析报告</span><small>待生成</small></li>
+        <li :class="{ complete: hasJobs }"><b>03</b><span>目标岗位</span><small>{{ hasJobs ? '已完成' : '待完成' }}</small></li>
+        <li :class="{ complete: hasReports }"><b>04</b><span>分析报告</span><small>{{ hasReports ? '已生成' : '待生成' }}</small></li>
       </ol>
+      <div class="home-stats" aria-label="完成统计">
+        <div class="home-stat">
+          <b>{{ stats.jobs }}</b>
+          <span>目标岗位已完成</span>
+        </div>
+        <div class="home-stat">
+          <b>{{ stats.reports }}</b>
+          <span>分析报告已生成</span>
+        </div>
+      </div>
     </section>
 
     <section class="home-section" aria-labelledby="recent-reports-title">
@@ -50,9 +60,13 @@ import { api } from '../api'
 import { saveDraft, store } from '../store'
 
 const reports = ref([])
+const stats = ref({ jobs: 0, reports: 0 })
 const resumeReady = ref(Boolean(store.draft.resumeText))
 const loading = ref(true)
 const loadError = ref('')
+
+const hasJobs = computed(() => stats.value.jobs > 0)
+const hasReports = computed(() => stats.value.reports > 0)
 
 const displayName = computed(() => {
   const name = String(store.user?.email || '').split('@')[0] || '你'
@@ -73,6 +87,8 @@ onMounted(async () => {
     resumeReady.value = Boolean(resume.hasResume)
     if (resume.text) saveDraft({ resumeText: resume.text, facts: store.draft.facts || resume.text })
     reports.value = (reportData.reports || []).slice(0, 3)
+    const total = (reportData.reports || []).length
+    stats.value = reportData.stats || { jobs: total, reports: total }
   } catch (error) {
     loadError.value = error.message || '暂时无法读取首页数据，请稍后重试。'
   } finally {
