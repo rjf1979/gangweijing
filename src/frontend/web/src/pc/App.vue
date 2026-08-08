@@ -4,6 +4,7 @@
   <main id="main-content" tabindex="-1">
     <router-view />
   </main>
+  <SiteFooter />
   <AppLoading />
 </template>
 
@@ -11,6 +12,7 @@
 import { onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import SiteHeader from './components/SiteHeader.vue'
+import SiteFooter from './components/SiteFooter.vue'
 import AppLoading from './components/AppLoading.vue'
 import { store, refreshSession, hideLoading } from './store'
 
