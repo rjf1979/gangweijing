@@ -89,7 +89,7 @@ onMounted(async () => {
     const [resume, reportData] = await Promise.all([api.get('/api/resume'), api.get('/api/reports')])
     resumeReady.value = Boolean(resume.hasResume)
     factsConfirmed.value = Boolean(resume.factsConfirmed)
-    if (resume.text) saveDraft({ resumeText: resume.text, facts: store.draft.facts || resume.text })
+    if (resume.text) saveDraft({ resumeText: resume.text, facts: undefined })
     reports.value = (reportData.reports || []).slice(0, 3)
     const total = (reportData.reports || []).length
     stats.value = reportData.stats || { jobs: total, reports: total }

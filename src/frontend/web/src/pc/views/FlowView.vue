@@ -43,7 +43,7 @@ function ensureStep() {
   const replacing = route.query.mode === 'replace'
   if (s === 'resume' && d.resumeText && !replacing) s = 'facts'
   if (s === 'facts' && !d.resumeText) s = 'resume'
-  if (s === 'job' && !d.facts) s = 'facts'
+  if (s === 'job' && !d.resumeText) s = 'facts'
   if (s === 'report' && !d.report) s = d.resumeText ? 'facts' : 'resume'
   if (s !== props.step) {
     router.replace('/' + s)

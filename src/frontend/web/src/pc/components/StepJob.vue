@@ -88,7 +88,7 @@ async function submit() {
   })
   try {
     const data = await api.post('/api/analyze', {
-      resumeText: store.draft.facts || store.draft.resumeText,
+      resumeText: store.draft.resumeText,
       jobText: value,
       companyShortName: companyShortName.value.trim(),
       jobTitle: jobTitle.value.trim(),
@@ -122,10 +122,17 @@ watch([jobText, companyShortName, jobTitle, file], () => {
   if (result.value) result.value = null
 })
 
-onMounted(() => {
+onMounted(async () => {
   jobText.value = store.draft.jobText || ''
   companyShortName.value = store.draft.companyShortName || ''
   jobTitle.value = store.draft.jobTitle || ''
+  // 以服务端已保存的简历为准，保证分析使用最新简历（避免旧草稿串值）
+  try {
+    const resume = await api.get('/api/resume')
+    if (resume.text) saveDraft({ resumeText: resume.text, facts: undefined })
+  } catch {
+    // 读取失败时保留本地草稿
+  }
 })
 </script>
 
