@@ -125,7 +125,7 @@
   4. 恢复 deleted_at=NULL 后报告重新出现（可恢复性验证）
 - 线上前端资源确认：PC 端 /pc/ 引用 index-CbHnzDPj.js，admin /admin/ 引用 index-CloOjCes.js，均 200
 
-## 2026-08-09 · 报告邮件重发 10 分钟冷却（已上线）· 重新分析一次性机会（待上线）
+## 2026-08-09 · 报告邮件重发 10 分钟冷却（已上线）· 重新分析一次性机会（已上线）
 
 **环境**：https://gwj.zhicha.io（PC 端）
 
@@ -146,12 +146,12 @@
 - 重新分析成功会同时记录源报告与新生成报告的 reanalyzed_at，两者均视为已使用机会，防止链式连续重分析刷成本
 - 首次生成报告（/api/analyze）不受次数限制；「修改材料后重分析」走新分析流程，不受此限
 
-### 线上验证结果（2026-08-09 已发布上线）
-- 已部署：主服务 release 20260809023004（server.js/db.js + public/pc 新产物 index-BySJ4DHR.js + index-Cilf_UST.css），PM2 gangweijing delete+start，服务 online
-- 冒烟：GET /、/pc/、新 JS 均 200；https 全部 200；app_releases 幂等 ALTER 已创建 reanalyzed_at 列
-- 部署内容核验：新 release 的 server.js 含 REANALYZE_MIN_INTERVAL_MS/emailResendWaitSeconds/reanalyzeWaitSeconds/REANALYZE_INTERVAL_LIMIT；前端 JS 含冷却逻辑关键字；DB 列 email_sent_times + reanalyzed_at 均存在
+### 线上验证结果（2026-08-09 已发布上线，release 20260809031303）
+- 已部署：主服务 release 20260809031303（server.js/db.js + public/pc 新产物 index-B1_lyZ6t.js + index-DWWwF-3s.css），PM2 gangweijing delete+start，服务 online
+- 部署核验：GET /、/pc/、新 JS 均 200；server.js 已删除 REANALYZE_MIN_INTERVAL_MS、reanalyze 接口已改为 REANALYZE_ALREADY_USED 一次性拦截；DB 列 reanalyzed_at 存在；列表/详情已不再下发 reanalyzeWaitSeconds
+- 说明：历史冷却版 release 20260809023004 已上线；本版将「重新分析 10 分钟冷却」升级为「每份报告仅一次机会，用后按钮隐藏」，邮件重发 10 分钟冷却保留
 
-## 2026-08-09 · 后台公告前端展示 + 记录用户已知悉（待上线）
+## 2026-08-09 · 后台公告前端展示 + 记录用户已知悉（已上线）
 
 **环境**：https://gwj.zhicha.io（PC 端）
 
@@ -175,3 +175,8 @@
 ### 确认项 4：公告为空不弹
 - 操作：后台公告内容清空保存 → 用户登录
 - 预期：无公告弹窗，正常使用
+
+### 线上验证结果（2026-08-09 已发布上线，release 20260809031303）
+- 已部署：主服务 release 20260809031303（含 GET /api/config 与 POST /api/announcement/ack）+ admin db.js 更新（announcement_updated_at），PM2 gangweijing / gangweijing-admin delete+start，均 online
+- 部署核验：GET /api/config 下发公告内容与 announcementUpdatedAt/announcementAckAt；DB 列 announcement_ack_at（app_users）+ announcement_updated_at（admin_settings）均已创建
+- 说明：生产已有公告内容，历史公告（announcement_updated_at 为空）未确认过的用户登录会弹一次，确认后不再弹；后续公告更新会重新要求确认
