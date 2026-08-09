@@ -31,6 +31,7 @@
           <div><strong>{{ item.reportName }}</strong><small>{{ formatDate(item.createdAt) }}</small></div>
           <span class="status" :class="'status-' + item.status">{{ statusLabel[item.status] || item.status }}</span>
           <span class="mail" :class="'mail-' + item.emailStatus">邮件：{{ mailLabel[item.emailStatus] || item.emailStatus }}</span>
+          <button v-if="item.canReanalyze" class="neo-button neo-button-secondary report-reanalyze" type="button" :disabled="reanalyzingId === item.id" @click.prevent.stop="reanalyze(item)">{{ reanalyzingId === item.id ? '分析中…' : '重新分析' }}</button>
         </router-link>
       </template>
     </div>
@@ -49,6 +50,7 @@ const reports = ref([])
 const loading = ref(true)
 const loadError = ref('')
 const starting = ref(false)
+const reanalyzingId = ref(null)
 
 const statusLabel = { completed: '已完成', analyzing: '分析中', failed: '失败' }
 const mailLabel = { sent: '已发送', pending: '待发送', failed: '发送失败', not_configured: '未配置', unknown: '未知' }
@@ -89,11 +91,39 @@ function formatDate(value) {
   return new Date(value).toLocaleString('zh-CN')
 }
 
+async function loadReports() {
+  const data = await api.get('/api/reports')
+  reports.value = data.reports || []
+  loadError.value = ''
+  return data
+}
+
+// 重新分析：基于原报告的岗位内容 + 用户最新简历生成新报告，完成后跳转新报告
+async function reanalyze(item) {
+  if (reanalyzingId.value) return
+  reanalyzingId.value = item.id
+  showLoading('正在重新分析', '基于该岗位内容和你最新的简历生成新报告')
+  try {
+    const data = await api.post('/api/reports/' + item.id + '/reanalyze', {})
+    await loadReports()
+    const token = data.reportUrl ? String(data.reportUrl).split('/').pop() : ''
+    if (token) router.push('/report/' + token)
+  } catch (err) {
+    if (err.code === 'EMAIL_NOT_VERIFIED') {
+      router.push('/verify')
+      return
+    }
+    window.alert('重新分析失败：' + err.message)
+  } finally {
+    reanalyzingId.value = null
+    hideLoading()
+  }
+}
+
 onMounted(async () => {
   showLoading('正在加载报告', '读取你的分析记录')
   try {
-    const data = await api.get('/api/reports')
-    reports.value = data.reports || []
+    await loadReports()
   } catch (err) {
     loadError.value = err.message
   } finally {

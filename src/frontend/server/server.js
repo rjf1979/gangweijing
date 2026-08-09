@@ -490,15 +490,14 @@ app.post('/api/extract/screenshot', upload.single('screenshot'), async (req, res
       payload = await callResponses({ model: process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: image }] }], text: { format: { type: 'json_object' } } }, ocrOpts);
     }
     const result = parseJsonText(extractText(payload)); const ocrModel = activeOcr?.modelId || process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL; const ocrUsage = extractUsage(payload, ocrModel); const ocrCost = await computeReportCost(ocrUsage); res.json({ text: result.text || '', companyShortName: result.company_short_name || '', jobTitle: result.job_title || '', warnings: result.warnings || [], usage: ocrUsage ? { ...ocrUsage, costSource: ocrCost.source, currency: ocrCost.currency } : null, costUsd: ocrCost.value, costSource: ocrCost.source }); } catch (error) { res.status(502).json({ error: `AI 截图识别失败：${error.message}` }); } finally { if (req.file?.path) await fs.unlink(req.file.path).catch(() => {}); } });
-app.post('/api/analyze', async (req, res) => {
+// 生成分析报告（供首次分析与重新分析复用）：构建报告记录 + 发送结果邮件
+async function generateReport({ user, resumeText, jobText, jobTitle, companyShortName }) {
   await refreshAppConfig();
   const active = await resolveAiModel('text');
   const credential = await resolveAiCredential(active);
-  if (!credential.apiKey) return res.status(503).json({ error: '尚未配置 AI 接口，不能生成真实 AI 报告。' });
-  const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录后生成报告。' });
-  if (!user.emailVerifiedAt) return res.status(403).json({ error: '请先验证注册邮箱，再生成分析报告。', code: 'EMAIL_NOT_VERIFIED' });
-  const { resumeText, jobText, jobTitle, companyShortName } = req.body; const email = user.email;
-  if (!resumeText || !jobText) return res.status(400).json({ error: '请先提供简历文本和岗位内容。' });
+  if (!credential.apiKey) throw new Error('尚未配置 AI 接口，不能生成真实 AI 报告。');
+  if (!resumeText || !jobText) throw new Error('请先提供简历文本和岗位内容。');
+  const email = user.email;
   // 隐私脱敏：发送 AI 前对简历打码，库中存的是脱敏文本，未脱敏的请求文本也先脱敏再使用
   const maskedResume = maskResumePII(resumeText);
   // 简历输入：优先使用已保存并结构化的 LLM 格式简历（更精准、省 token），未结构化或文本不一致时回退原始文本
@@ -507,34 +506,82 @@ app.post('/api/analyze', async (req, res) => {
     resumeInput = `【简历结构化数据】\n${JSON.stringify(user.resumeStructured, null, 2)}\n【简历原文】\n${maskedResume}`;
   }
   const prompt = `你是严谨的中文职业顾问。只依据给出的简历与岗位内容分析，不能承诺 offer 或虚构经历。输出严格 JSON：{company_short_name,job_title,summary, qualification:{status,evidence,risks}, dimensions:[{name,score_0_to_5,evidence,gap}], verify:[string], resume_rewrite:[{section,original_issue,rewrite_direction,example}], actions:[string]}。company_short_name 去掉有限公司等工商后缀。公司简称：${companyShortName || '请从岗位正文识别'}\n岗位名称：${jobTitle || '请从岗位正文识别'}\n岗位内容：${jobText}\n简历：${resumeInput}`;
-  try {
-    let payload;
-    let usedModel;
-    const callOpts = credential.apiKey ? { apiKey: credential.apiKey, ...(credential.baseUrl ? { baseUrl: credential.baseUrl } : {}) } : {};
-    if (active?.apiProtocol === 'responses') {
-      payload = await callResponses({ model: active.modelId, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } }, callOpts);
-    } else if (active) {
-      payload = await callChatCompletions({ model: active.modelId, messages: [{ role: 'user', content: prompt }], temperature: 0.2, response_format: { type: 'json_object' } }, callOpts);
-    } else {
-      payload = await callResponses({ model: process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } }, callOpts);
-    }
-    usedModel = active?.modelId || process.env.OPENAI_MODEL;
-    const report = parseJsonText(extractText(payload));
-    const usage = extractUsage(payload, usedModel);
-    const cost = await computeReportCost(usage);
-    const costUsd = cost.value;
-    const costSource = cost.source;
-    const createdAt = new Date().toISOString(); const finalCompany = companyShortName || report.company_short_name || ''; const finalJobTitle = jobTitle || report.job_title || ''; const accessToken = crypto.randomBytes(24).toString('base64url'); // 岗位-简历职业联动：识别岗位职业模板 + 简历职业快照，供报告页一致性提示
+  let payload;
+  let usedModel;
+  const callOpts = credential.apiKey ? { apiKey: credential.apiKey, ...(credential.baseUrl ? { baseUrl: credential.baseUrl } : {}) } : {};
+  if (active?.apiProtocol === 'responses') {
+    payload = await callResponses({ model: active.modelId, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } }, callOpts);
+  } else if (active) {
+    payload = await callChatCompletions({ model: active.modelId, messages: [{ role: 'user', content: prompt }], temperature: 0.2, response_format: { type: 'json_object' } }, callOpts);
+  } else {
+    payload = await callResponses({ model: process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } }, callOpts);
+  }
+  usedModel = active?.modelId || process.env.OPENAI_MODEL;
+  const report = parseJsonText(extractText(payload));
+  const usage = extractUsage(payload, usedModel);
+  const cost = await computeReportCost(usage);
+  const costUsd = cost.value;
+  const costSource = cost.source;
+  const createdAt = new Date().toISOString();
+  const finalCompany = companyShortName || report.company_short_name || '';
+  const finalJobTitle = jobTitle || report.job_title || '';
+  const accessToken = crypto.randomBytes(24).toString('base64url');
+  // 岗位-简历职业联动：识别岗位职业模板 + 简历职业快照，供报告页一致性提示
   const jobOccupation = detectOccupation(String(jobText || ''));
   const resumeOccupation = withOccupation(user.resumeStructured || {}, maskedResume).occupation || null;
-  const record = { id: crypto.randomUUID(), accessToken, userId: user.id, email, companyShortName: finalCompany, jobTitle: finalJobTitle, reportName: reportName(createdAt, finalCompany, finalJobTitle), status: 'completed', emailStatus: 'pending', report, usage: usage ? { ...usage, costSource, currency: cost.currency } : null, costUsd, costSource, jobOccupation, resumeOccupation, createdAt, updatedAt: createdAt }; db.reports.push(record); await saveDb(db);
-    const reportUrl = `${publicAppUrl()}/report/${accessToken}`;
-    let emailSent = false; try { await sendReportEmail(email, reportUrl, report); emailSent = Boolean(email && (appConfig.resendApiKey || process.env.RESEND_API_KEY) && (appConfig.emailFrom || process.env.EMAIL_FROM)); record.emailStatus = emailSent ? 'sent' : 'not_configured'; } catch (emailError) { record.emailStatus = 'failed'; console.error(emailError.message); } record.updatedAt = new Date().toISOString(); await saveDb(db);
-    res.json({ id: record.id, reportName: record.reportName, reportUrl, emailSent, report });
-  } catch (error) { res.status(502).json({ error: `AI 分析失败：${error.message}` }); }
+  const record = { id: crypto.randomUUID(), accessToken, userId: user.id, email, companyShortName: finalCompany, jobTitle: finalJobTitle, jobText, reportName: reportName(createdAt, finalCompany, finalJobTitle), status: 'completed', emailStatus: 'pending', report, usage: usage ? { ...usage, costSource, currency: cost.currency } : null, costUsd, costSource, jobOccupation, resumeOccupation, createdAt, updatedAt: createdAt };
+  const reportUrl = `${publicAppUrl()}/report/${accessToken}`;
+  let emailSent = false;
+  try {
+    await sendReportEmail(email, reportUrl, report);
+    emailSent = Boolean(email && (appConfig.resendApiKey || process.env.RESEND_API_KEY) && (appConfig.emailFrom || process.env.EMAIL_FROM));
+    record.emailStatus = emailSent ? 'sent' : 'not_configured';
+  } catch (emailError) {
+    record.emailStatus = 'failed';
+    console.error(emailError.message);
+  }
+  record.updatedAt = new Date().toISOString();
+  return { record, reportUrl };
+}
+
+app.post('/api/analyze', async (req, res) => {
+  const db = await readDb();
+  const user = currentUser(req, db);
+  if (!user) return res.status(401).json({ error: '请先登录后生成报告。' });
+  if (!user.emailVerifiedAt) return res.status(403).json({ error: '请先验证注册邮箱，再生成分析报告。', code: 'EMAIL_NOT_VERIFIED' });
+  const { resumeText, jobText, jobTitle, companyShortName } = req.body;
+  try {
+    const { record, reportUrl } = await generateReport({ user, resumeText, jobText, jobTitle, companyShortName });
+    db.reports.push(record);
+    await saveDb(db);
+    res.json({ id: record.id, reportName: record.reportName, reportUrl, emailSent: record.emailStatus === 'sent', report: record.report });
+  } catch (error) {
+    res.status(502).json({ error: `AI 分析失败：${error.message}` });
+  }
 });
-app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = publicAppUrl(); const owned = db.reports.filter(item => item.userId === user.id || (!item.userId && item.email === user.email)); const reports = owned.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null })); const jobKeys = new Set(owned.map(item => `${item.companyShortName || ''}|${item.jobTitle || ''}`).filter(key => key !== '|')); res.json({ reports, stats: { jobs: jobKeys.size, reports: owned.length } }); });
-app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, report: record.report, jobOccupation: record.jobOccupation || null, resumeOccupation: record.resumeOccupation || null }); });
+
+// 重新分析：基于原报告的岗位内容 + 用户最新简历重新生成一份新报告
+app.post('/api/reports/:id/reanalyze', async (req, res) => {
+  const db = await readDb();
+  const user = currentUser(req, db);
+  if (!user) return res.status(401).json({ error: '请先登录。' });
+  if (!user.emailVerifiedAt) return res.status(403).json({ error: '请先验证注册邮箱，再生成分析报告。', code: 'EMAIL_NOT_VERIFIED' });
+  const record = db.reports.find(item => item.id === req.params.id && (item.userId === user.id || (!item.userId && item.email === user.email)));
+  if (!record) return res.status(404).json({ error: '报告不存在或无权访问。' });
+  if (!record.jobText) return res.status(400).json({ error: '该报告缺少岗位内容，无法重新分析。' });
+  if (!user.resumeText) return res.status(400).json({ error: '请先保存简历后再重新分析。' });
+  try {
+    const { record: created, reportUrl } = await generateReport({ user, resumeText: user.resumeText, jobText: record.jobText, jobTitle: record.jobTitle, companyShortName: record.companyShortName });
+    db.reports.push(created);
+    await saveDb(db);
+    res.json({ id: created.id, reportName: created.reportName, reportUrl, emailSent: created.emailStatus === 'sent', report: created.report });
+  } catch (error) {
+    res.status(502).json({ error: `AI 分析失败：${error.message}` });
+  }
+});
+
+app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = publicAppUrl(); const owned = db.reports.filter(item => item.userId === user.id || (!item.userId && item.email === user.email)); const reports = owned.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null, canReanalyze: Boolean(item.jobText) })); const jobKeys = new Set(owned.map(item => `${item.companyShortName || ''}|${item.jobTitle || ''}`).filter(key => key !== '|')); res.json({ reports, stats: { jobs: jobKeys.size, reports: owned.length } }); });
+app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, report: record.report, jobOccupation: record.jobOccupation || null, resumeOccupation: record.resumeOccupation || null, canReanalyze: Boolean(record.jobText) }); });
 // 旧 URL -> uni-app H5 页面重定向（邮件链接与旧书签不失效）
 app.get('/report/:token', (req, res) => {
   if (isMobileUA(req.headers['user-agent'])) return res.redirect('/#/pages/report/detail?token=' + encodeURIComponent(req.params.token));
