@@ -20,7 +20,8 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { store, STEPS } from '../store'
+import { api } from '../api'
+import { store, saveDraft, STEPS } from '../store'
 import StepResume from '../components/StepResume.vue'
 import StepFacts from '../components/StepFacts.vue'
 import StepJob from '../components/StepJob.vue'
@@ -36,11 +37,31 @@ const active = ref(props.step)
 
 const activeIndex = computed(() => STEPS.indexOf(active.value))
 
-// 恢复第一版 PC 的进入逻辑：有简历自动进事实、无简历回简历、无事实回事实、无报告回事实/简历
-function ensureStep() {
+let resumePromise = null
+// 草稿为空时先从服务端加载已保存简历，避免新会话（sessionStorage 无草稿）把用户弹回重新上传
+async function loadServerResume() {
+  if (store.draft.resumeText) return
+  if (resumePromise) return resumePromise
+  resumePromise = (async () => {
+    try {
+      const resume = await api.get('/api/resume')
+      if (resume.text) saveDraft({ resumeText: resume.text, facts: undefined })
+    } catch {
+      // 读取失败时保留本地草稿，不阻塞页面
+    }
+  })().finally(() => { resumePromise = null })
+  return resumePromise
+}
+
+// 流程进入逻辑：先保证草稿有简历（服务端兜底），再按步骤跳转
+// 有简历自动进事实、无简历回简历、无事实回事实、无报告回事实/简历
+async function ensureStep() {
+  const replacing = route.query.mode === 'replace'
+  if (!store.draft.resumeText && !replacing) {
+    await loadServerResume()
+  }
   const d = store.draft
   let s = props.step
-  const replacing = route.query.mode === 'replace'
   if (s === 'resume' && d.resumeText && !replacing) s = 'facts'
   if (s === 'facts' && !d.resumeText) s = 'resume'
   if (s === 'job' && !d.resumeText) s = 'facts'
