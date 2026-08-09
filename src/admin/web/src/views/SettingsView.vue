@@ -24,6 +24,11 @@
               <p class="field-hint">0 表示不限制；当前为预留配置，主服务接入后生效。</p>
             </div>
             <div class="field">
+              <label class="field-label" for="analysis-concurrency">分析并发数</label>
+              <input id="analysis-concurrency" v-model.number="form.analysisConcurrency" class="input" type="number" min="1" max="10" required />
+              <p class="field-hint">后台排队分析同时执行的任务数（1-10），保存后主服务立即生效。</p>
+            </div>
+            <div class="field">
               <span class="field-label" id="reg-label">新用户注册</span>
               <label class="switch" for="reg-toggle">
                 <input id="reg-toggle" v-model="form.registrationEnabled" type="checkbox" aria-labelledby="reg-label" />
@@ -229,7 +234,7 @@ const addError = ref('')
 const deleteAdminTarget = ref(null)
 const deletingAdmin = ref(false)
 
-const form = reactive({ siteName: '', announcement: '', freeQuota: 3, registrationEnabled: true })
+const form = reactive({ siteName: '', announcement: '', freeQuota: 3, analysisConcurrency: 2, registrationEnabled: true })
 const passwordForm = reactive({ oldPassword: '', newPassword: '' })
 const addForm = reactive({ email: '', password: '' })
 const emailForm = reactive({ apiKey: '', emailFrom: '', clearKey: false })
@@ -256,6 +261,7 @@ async function load() {
       form.siteName = data.settings.site_name || ''
       form.announcement = data.settings.announcement || ''
       form.freeQuota = data.settings.free_quota ?? 3
+      form.analysisConcurrency = data.settings.analysis_concurrency ?? 2
       form.registrationEnabled = Boolean(data.settings.registration_enabled)
     }
     applySettings(data.settings)
@@ -273,6 +279,7 @@ async function saveSite() {
       siteName: form.siteName,
       announcement: form.announcement,
       freeQuota: form.freeQuota,
+      analysisConcurrency: form.analysisConcurrency,
       registrationEnabled: form.registrationEnabled,
     })
     toast('站点设置已保存', 'success')

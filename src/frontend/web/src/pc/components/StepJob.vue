@@ -81,15 +81,16 @@ async function submit() {
       jobTitle: jobTitle.value.trim(),
     })
     saveDraft({
-      report: data.report,
+      report: null,
       reportName: data.reportName,
       reportUrl: data.reportUrl,
-      emailSent: data.emailSent,
+      emailSent: false,
     })
-    // 分析完成后直接展示分析结果（进入报告展示步骤），不引导重新走全流程
+    // 后台排队分析：提交即入队，跳转报告详情页展示“分析中”并自动刷新，完成后展示结果
     store.hasAnyReport = true // 本会话内已完成一次全流程，之后回首页不再强制引导
     submitting.value = false
-    emit('next')
+    const token = data.reportUrl ? String(data.reportUrl).split('/').pop() : ''
+    if (token) router.push('/report/' + token)
   } catch (err) {
     submitting.value = false
     if (err.code === 'EMAIL_NOT_VERIFIED') {

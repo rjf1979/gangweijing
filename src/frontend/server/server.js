@@ -26,7 +26,7 @@ await dbStore.init();
 const readDb = () => dbStore.readDb();
 const saveDb = db => dbStore.saveDb(db);
 // 后台配置（admin_settings 数据库）：邮件配置优先于环境变量兜底，保存后立即生效；AI 凭证由 ai_keys / ai_models 提供
-const appConfig = { resendApiKey: '', emailFrom: '' };
+const appConfig = { resendApiKey: '', emailFrom: '', analysisConcurrency: 2 };
 await refreshAppConfig();
 async function refreshAppConfig() {
   try {
@@ -34,8 +34,11 @@ async function refreshAppConfig() {
     if (row) {
       appConfig.resendApiKey = row.resend_api_key || '';
       appConfig.emailFrom = row.email_from || '';
+      const n = parseInt(row.analysis_concurrency, 10);
+      if (Number.isFinite(n) && n > 0) appConfig.analysisConcurrency = Math.min(n, 10);
     }
   } catch (error) { console.error('读取后台 AI/邮件配置失败：', error.message); }
+  syncAnalysisWorkers();
 }
 const sessionCookie = (token, maxAge = 60 * 60 * 24 * 30) => `jm_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
 function currentSession(req, db) { const cookie = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('jm_session='))?.split('=')[1] || ''; const token = (req.headers['x-session-token'] || cookie); return db.sessions?.find(x => x.token === token && new Date(x.expiresAt) > new Date()); }
@@ -235,6 +238,84 @@ const publicAppUrl = () => {
 const EMAIL_MIN_INTERVAL_MS = 10 * 60 * 1000; // 两次发送至少间隔 10 分钟
 const EMAIL_MAX_DAILY = 5; // 同一报告一天最多发送 5 次
 const REANALYZE_MIN_INTERVAL_MS = 10 * 60 * 1000; // 同一报告重新分析至少间隔 10 分钟
+
+// ===== 后台排队分析：所有岗位分析（首次+重新分析）统一入队，按系统配置的并发数执行 =====
+const analysisQueue = []; // 待处理任务（先进先出）
+let analysisWorkers = []; // 活跃 worker 列表
+const ANALYSIS_MAX_WORKERS = 10;
+function analysisWorkerTarget() {
+  const n = parseInt(appConfig.analysisConcurrency, 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, ANALYSIS_MAX_WORKERS) : 2;
+}
+async function runAnalysisWorker(worker) {
+  while (worker.running) {
+    const task = analysisQueue.shift();
+    if (!task) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      continue;
+    }
+    try {
+      await processAnalysisTask(task);
+    } catch (error) {
+      console.error('分析任务异常：', task.reportId, error.message);
+      try { await dbStore.updateReportFields(task.reportId, { status: 'failed', emailStatus: 'unknown', updatedAt: new Date().toISOString() }); } catch {}
+    }
+  }
+}
+function syncAnalysisWorkers() {
+  const target = analysisWorkerTarget();
+  while (analysisWorkers.length < target) {
+    const worker = { running: true };
+    analysisWorkers.push(worker);
+    runAnalysisWorker(worker);
+  }
+  if (analysisWorkers.length > target) {
+    analysisWorkers.slice(target).forEach(worker => { worker.running = false; });
+    analysisWorkers = analysisWorkers.slice(0, target);
+  }
+}
+async function processAnalysisTask(task) {
+  const db = await readDb();
+  const record = db.reports.find(item => item.id === task.reportId);
+  if (!record || record.deletedAt) return; // 已删除，忽略
+  const user = db.users.find(item => item.id === task.userId);
+  if (!user || !user.resumeText) {
+    await dbStore.updateReportFields(record.id, { status: 'failed', emailStatus: 'unknown', updatedAt: new Date().toISOString() });
+    return;
+  }
+  const { record: result } = await generateReport({
+    user: { id: user.id, email: user.email, resumeText: user.resumeText, resumeStructured: user.resumeStructured },
+    resumeText: task.resumeText || user.resumeText,
+    jobText: task.jobText,
+    jobTitle: task.jobTitle,
+    companyShortName: task.companyShortName,
+    baseRecord: record,
+  });
+  await dbStore.updateReportFields(record.id, {
+    status: 'completed',
+    reportName: result.reportName,
+    companyShortName: result.companyShortName,
+    jobTitle: result.jobTitle,
+    report: result.report,
+    emailStatus: result.emailStatus,
+    emailSentTimes: result.emailSentTimes || [],
+    usage: result.usage || null,
+    costUsd: result.costUsd,
+    costSource: result.costSource || null,
+    updatedAt: result.updatedAt,
+  });
+}
+async function recoverStaleAnalyzing() {
+  try {
+    const db = await readDb();
+    let dirty = false;
+    const nowIso = new Date().toISOString();
+    for (const item of db.reports) {
+      if (item.status === 'analyzing') { item.status = 'failed'; item.updatedAt = nowIso; dirty = true; }
+    }
+    if (dirty) await saveDb(db);
+  } catch (error) { console.error('恢复遗留分析任务失败：', error.message); }
+}
 // 按 Asia/Shanghai 时区返回 YYYY-MM-DD，用于“一天最多 5 次”的日界判断
 function shanghaiDateKey(iso) {
   const d = new Date(iso);
@@ -512,7 +593,7 @@ app.post('/api/extract/screenshot', upload.single('screenshot'), async (req, res
     }
     const result = parseJsonText(extractText(payload)); const ocrModel = activeOcr?.modelId || process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL; const ocrUsage = extractUsage(payload, ocrModel); const ocrCost = await computeReportCost(ocrUsage); res.json({ text: result.text || '', companyShortName: result.company_short_name || '', jobTitle: result.job_title || '', warnings: result.warnings || [], usage: ocrUsage ? { ...ocrUsage, costSource: ocrCost.source, currency: ocrCost.currency } : null, costUsd: ocrCost.value, costSource: ocrCost.source }); } catch (error) { res.status(502).json({ error: `AI 截图识别失败：${error.message}` }); } finally { if (req.file?.path) await fs.unlink(req.file.path).catch(() => {}); } });
 // 生成分析报告（供首次分析与重新分析复用）：构建报告记录 + 发送结果邮件
-async function generateReport({ user, resumeText, jobText, jobTitle, companyShortName }) {
+async function generateReport({ user, resumeText, jobText, jobTitle, companyShortName, baseRecord }) {
   await refreshAppConfig();
   const active = await resolveAiModel('text');
   const credential = await resolveAiCredential(active);
@@ -546,14 +627,32 @@ async function generateReport({ user, resumeText, jobText, jobTitle, companyShor
   const createdAt = new Date().toISOString();
   const finalCompany = companyShortName || report.company_short_name || '';
   const finalJobTitle = jobTitle || report.job_title || '';
-  const accessToken = crypto.randomBytes(24).toString('base64url');
+  const accessToken = baseRecord?.accessToken || crypto.randomBytes(24).toString('base64url');
   // 岗位-简历职业联动：识别岗位职业模板 + 简历职业快照，供报告页一致性提示
   const jobOccupation = detectOccupation(String(jobText || ''));
   const resumeOccupation = withOccupation(user.resumeStructured || {}, maskedResume).occupation || null;
-  const record = { id: crypto.randomUUID(), accessToken, userId: user.id, email, companyShortName: finalCompany, jobTitle: finalJobTitle, jobText, reportName: reportName(createdAt, finalCompany, finalJobTitle), status: 'completed', emailStatus: 'pending', report, usage: usage ? { ...usage, costSource, currency: cost.currency } : null, costUsd, costSource, jobOccupation, resumeOccupation, createdAt, updatedAt: createdAt };
+  // 后台排队分析：已存在占位记录（status=analyzing）时直接填充，保留原 id/accessToken/createdAt
+  const record = baseRecord || { id: crypto.randomUUID() };
+  record.accessToken = accessToken;
+  record.userId = user.id;
+  record.email = email;
+  record.companyShortName = finalCompany;
+  record.jobTitle = finalJobTitle;
+  record.jobText = jobText;
+  record.reportName = reportName(createdAt, finalCompany, finalJobTitle);
+  record.status = 'completed';
+  record.emailStatus = 'pending';
+  record.report = report;
+  record.usage = usage ? { ...usage, costSource, currency: cost.currency } : null;
+  record.costUsd = costUsd;
+  record.costSource = costSource;
+  record.jobOccupation = jobOccupation;
+  record.resumeOccupation = resumeOccupation;
+  record.emailSentTimes = [];
+  record.createdAt = record.createdAt || createdAt;
+  record.updatedAt = createdAt;
   const reportUrl = `${publicAppUrl()}/report/${accessToken}`;
   let emailSent = false;
-  record.emailSentTimes = [];
   try {
     await sendReportEmail(email, reportUrl, report);
     emailSent = Boolean(email && (appConfig.resendApiKey || process.env.RESEND_API_KEY) && (appConfig.emailFrom || process.env.EMAIL_FROM));
@@ -573,14 +672,22 @@ app.post('/api/analyze', async (req, res) => {
   if (!user) return res.status(401).json({ error: '请先登录后生成报告。' });
   if (!user.emailVerifiedAt) return res.status(403).json({ error: '请先验证注册邮箱，再生成分析报告。', code: 'EMAIL_NOT_VERIFIED' });
   const { resumeText, jobText, jobTitle, companyShortName } = req.body;
-  try {
-    const { record, reportUrl } = await generateReport({ user, resumeText, jobText, jobTitle, companyShortName });
-    db.reports.push(record);
-    await saveDb(db);
-    res.json({ id: record.id, reportName: record.reportName, reportUrl, emailSent: record.emailStatus === 'sent', report: record.report });
-  } catch (error) {
-    res.status(502).json({ error: `AI 分析失败：${error.message}` });
-  }
+  if (!resumeText || !jobText) return res.status(400).json({ error: '请先提供简历文本和岗位内容。' });
+  // 后台排队分析：先创建“分析中”占位记录并入队，任务由 worker 异步完成
+  const createdAt = new Date().toISOString();
+  const accessToken = crypto.randomBytes(24).toString('base64url');
+  const record = {
+    id: crypto.randomUUID(), accessToken, userId: user.id, email: user.email,
+    companyShortName: companyShortName || '', jobTitle: jobTitle || '', jobText,
+    reportName: reportName(createdAt, companyShortName || '', jobTitle || ''),
+    status: 'analyzing', emailStatus: 'pending', report: null,
+    emailSentTimes: [], createdAt, updatedAt: createdAt,
+  };
+  db.reports.push(record);
+  await saveDb(db);
+  analysisQueue.push({ reportId: record.id, userId: user.id, resumeText, jobText, jobTitle: jobTitle || '', companyShortName: companyShortName || '' });
+  syncAnalysisWorkers();
+  res.json({ id: record.id, reportName: record.reportName, reportUrl: `${publicAppUrl()}/report/${accessToken}`, status: 'analyzing', queued: true });
 });
 
 // 重新分析：基于原报告的岗位内容 + 用户最新简历重新生成一份新报告
@@ -599,18 +706,24 @@ app.post('/api/reports/:id/reanalyze', async (req, res) => {
     const waitMin = Math.max(1, Math.ceil((REANALYZE_MIN_INTERVAL_MS - (now - lastReanalyzeAt)) / 60000));
     return res.status(429).json({ error: `重新分析过于频繁，请至少间隔 10 分钟，约 ${waitMin} 分钟后再试。`, code: 'REANALYZE_INTERVAL_LIMIT' });
   }
-  try {
-    const { record: created, reportUrl } = await generateReport({ user, resumeText: user.resumeText, jobText: record.jobText, jobTitle: record.jobTitle, companyShortName: record.companyShortName });
-    const reanalyzedAt = new Date(now).toISOString();
-    record.reanalyzedAt = reanalyzedAt;
-    record.updatedAt = reanalyzedAt;
-    created.reanalyzedAt = reanalyzedAt; // 新报告同样记录，防止链式连续重分析
-    db.reports.push(created);
-    await saveDb(db);
-    res.json({ id: created.id, reportName: created.reportName, reportUrl, emailSent: created.emailStatus === 'sent', report: created.report });
-  } catch (error) {
-    res.status(502).json({ error: `AI 分析失败：${error.message}` });
-  }
+  // 后台排队分析：创建“分析中”占位记录并入队，任务由 worker 异步完成；入队即记录冷却，防链式连点
+  const reanalyzedAt = new Date(now).toISOString();
+  record.reanalyzedAt = reanalyzedAt;
+  record.updatedAt = reanalyzedAt;
+  const createdAt = new Date(now).toISOString();
+  const accessToken = crypto.randomBytes(24).toString('base64url');
+  const created = {
+    id: crypto.randomUUID(), accessToken, userId: user.id, email: user.email,
+    companyShortName: record.companyShortName || '', jobTitle: record.jobTitle || '', jobText: record.jobText,
+    reportName: reportName(createdAt, record.companyShortName || '', record.jobTitle || ''),
+    status: 'analyzing', emailStatus: 'pending', report: null,
+    emailSentTimes: [], reanalyzedAt, createdAt, updatedAt: createdAt,
+  };
+  db.reports.push(created);
+  await saveDb(db);
+  analysisQueue.push({ reportId: created.id, userId: user.id, resumeText: user.resumeText, jobText: record.jobText, jobTitle: record.jobTitle || '', companyShortName: record.companyShortName || '' });
+  syncAnalysisWorkers();
+  res.json({ id: created.id, reportName: created.reportName, reportUrl: `${publicAppUrl()}/report/${accessToken}`, status: 'analyzing', queued: true });
 });
 
 // 重新发送报告邮件：两次至少间隔 10 分钟，同一报告当天最多 5 次（服务端强制，禁止绕过）
@@ -664,7 +777,7 @@ app.delete('/api/reports/:id', async (req, res) => {
 });
 
 app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = publicAppUrl(); const owned = db.reports.filter(item => !item.deletedAt && (item.userId === user.id || (!item.userId && item.email === user.email))); const reports = owned.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => { const emailStats = emailSendStats(item); return ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null, canReanalyze: Boolean(item.jobText), canResendEmail: Boolean(item.email), emailSentToday: emailStats.todayCount, emailMaxToday: EMAIL_MAX_DAILY, emailResendWaitSeconds: remainingWaitSeconds(emailStats.lastAt, EMAIL_MIN_INTERVAL_MS), reanalyzeWaitSeconds: remainingWaitSeconds(item.reanalyzedAt || null, REANALYZE_MIN_INTERVAL_MS) }); }); const jobKeys = new Set(owned.map(item => `${item.companyShortName || ''}|${item.jobTitle || ''}`).filter(key => key !== '|')); res.json({ reports, stats: { jobs: jobKeys.size, reports: owned.length } }); });
-app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record || record.deletedAt) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, report: record.report, jobOccupation: record.jobOccupation || null, resumeOccupation: record.resumeOccupation || null, canReanalyze: Boolean(record.jobText), reanalyzeWaitSeconds: remainingWaitSeconds(record.reanalyzedAt || null, REANALYZE_MIN_INTERVAL_MS) }); });
+app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record || record.deletedAt) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, status: record.status || 'completed', report: record.report, jobOccupation: record.jobOccupation || null, resumeOccupation: record.resumeOccupation || null, canReanalyze: Boolean(record.jobText), reanalyzeWaitSeconds: remainingWaitSeconds(record.reanalyzedAt || null, REANALYZE_MIN_INTERVAL_MS) }); });
 // 旧 URL -> uni-app H5 页面重定向（邮件链接与旧书签不失效）
 app.get('/report/:token', (req, res) => {
   if (isMobileUA(req.headers['user-agent'])) return res.redirect('/#/pages/report/detail?token=' + encodeURIComponent(req.params.token));
@@ -703,6 +816,8 @@ async function cleanupTempFiles() {
 }
 cleanupTempFiles();
 setInterval(cleanupTempFiles, 60 * 60 * 1000).unref();
+// 启动恢复：重启遗留的“分析中”任务标记失败，并按系统配置启动并发 worker
+recoverStaleAnalyzing().then(() => syncAnalysisWorkers()).catch(error => console.error('启动恢复分析任务失败：', error.message));
 const port = Number(process.env.PORT || 3215);
 const host = process.env.HOST || '127.0.0.1';
 app.listen(port, host, () => console.log(`岗位镜运行在 http://${host}:${port}`));

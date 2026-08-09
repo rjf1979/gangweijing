@@ -32,7 +32,7 @@
           <span class="status" :class="'status-' + item.status">{{ statusLabel[item.status] || item.status }}</span>
           <span class="mail" :class="'mail-' + item.emailStatus">邮件：{{ mailLabel[item.emailStatus] || item.emailStatus }}<template v-if="item.emailSentToday">（今日 {{ item.emailSentToday }}/{{ item.emailMaxToday }}）</template></span>
           <div class="row-actions">
-            <button v-if="item.canResendEmail" class="neo-button neo-button-secondary report-resend-email" type="button" :disabled="resendingId === item.id || emailLimitReached(item) || emailCooldown(item)" :title="emailLimitReached(item) ? '今日发送已达上限' : (emailCooldown(item) ? emailWaitText(item) : '')" @click.prevent.stop="resendEmail(item)">{{ resendingId === item.id ? '发送中…' : '重新发送邮件' }}</button>
+            <button v-if="item.canResendEmail" class="neo-button neo-button-secondary report-resend-email" type="button" :disabled="resendingId === item.id || emailLimitReached(item) || emailCooldown(item)" :title="emailLimitReached(item) ? '今日发送已达上限' : (emailCooldown(item) ? emailWaitText(item) : '')" @click.prevent.stop="resendEmail(item)">{{ resendingId === item.id ? '发送中…' : '重新通知' }}</button>
             <button v-if="item.canReanalyze" class="neo-button neo-button-secondary report-reanalyze" type="button" :disabled="reanalyzingId === item.id || reanalyzeCooldown(item)" :title="reanalyzeCooldown(item) ? reanalyzeWaitText(item) : ''" @click.prevent.stop="reanalyze(item)">{{ reanalyzingId === item.id ? '分析中…' : '重新分析' }}</button>
             <button class="neo-button neo-button-secondary report-delete" type="button" :disabled="deletingId === item.id" @click.prevent.stop="deleteReport(item)">{{ deletingId === item.id ? '删除中…' : '删除' }}</button>
           </div>
@@ -43,7 +43,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { store, showLoading, hideLoading, saveDraft, clearJobDraft } from '../store'
@@ -157,23 +157,45 @@ async function deleteReport(item) {
 async function reanalyze(item) {
   if (reanalyzingId.value) return
   reanalyzingId.value = item.id
-  showLoading('正在重新分析', '基于该岗位内容和你最新的简历生成新报告')
   try {
-    const data = await api.post('/api/reports/' + item.id + '/reanalyze', {})
+    await api.post('/api/reports/' + item.id + '/reanalyze', {})
     await loadReports()
-    const token = data.reportUrl ? String(data.reportUrl).split('/').pop() : ''
-    if (token) router.push('/report/' + token)
+    window.alert('已进入重新分析任务，分析完成后会在报告列表自动出现新报告。')
+    startPolling()
   } catch (err) {
     if (err.code === 'EMAIL_NOT_VERIFIED') {
       router.push('/verify')
       return
     }
-    window.alert('重新分析失败：' + err.message)
+    window.alert('重新分析提交失败：' + err.message)
   } finally {
     reanalyzingId.value = null
-    hideLoading()
   }
 }
+
+// 后台排队分析：存在「分析中」报告时自动轮询，完成后列表自然出现新报告
+let pollTimer = null
+function hasAnalyzing() {
+  return reports.value.some(item => item.status === 'analyzing')
+}
+async function pollReports() {
+  try {
+    const data = await loadReports()
+    if (data.reports.some(item => item.status === 'analyzing')) {
+      pollTimer = setTimeout(pollReports, 5000)
+    } else {
+      pollTimer = null
+    }
+  } catch {
+    pollTimer = null
+  }
+}
+function startPolling() {
+  if (pollTimer) return
+  if (!hasAnalyzing()) return
+  pollTimer = setTimeout(pollReports, 5000)
+}
+onUnmounted(() => { if (pollTimer) { clearTimeout(pollTimer); pollTimer = null } })
 
 onMounted(async () => {
   showLoading('正在加载报告', '读取你的分析记录')
@@ -185,5 +207,6 @@ onMounted(async () => {
     loading.value = false
     hideLoading()
   }
+  startPolling()
 })
 </script>

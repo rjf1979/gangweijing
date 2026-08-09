@@ -405,6 +405,7 @@ app.get('/api/admin/settings', requireAdmin, async (req, res) => {
       registration_enabled: settings.registration_enabled,
       resend_api_key_masked: maskSecret(settings.resend_api_key),
       email_from: settings.email_from || null,
+      analysis_concurrency: settings.analysis_concurrency ?? 2,
       updated_at: settings.updated_at,
     } : null,
     admins: admins.map(publicAdmin),
@@ -432,6 +433,11 @@ app.put('/api/admin/settings', express.json(), requireAdmin, async (req, res) =>
   }
   if ('registrationEnabled' in req.body) {
     patch.registrationEnabled = Boolean(req.body.registrationEnabled);
+  }
+  if ('analysisConcurrency' in req.body) {
+    const n = parseInt(req.body.analysisConcurrency, 10);
+    if (!Number.isFinite(n) || n < 1 || n > 10) return res.status(400).json({ error: '分析并发数需为 1-10 的整数。' });
+    patch.analysisConcurrency = n;
   }
 
   // 邮件配置（Resend）：同上

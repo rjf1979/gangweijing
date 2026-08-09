@@ -38,6 +38,7 @@ VALUES (1, '岗位镜管理后台', now())
 ON CONFLICT (id) DO NOTHING;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS resend_api_key text;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS email_from text;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS analysis_concurrency integer NOT NULL DEFAULT 2;
 -- 自愈：历史编码问题可能导致默认站点名被写成问号/空，启动时自动重置为默认值（不覆盖用户后期修改）
 CREATE TABLE IF NOT EXISTS ai_models (
   id uuid PRIMARY KEY,
@@ -200,7 +201,7 @@ export function createPgStore() {
 
     // ===== 站点设置 =====
     async getSettings() {
-      const { rows } = await pool.query('SELECT site_name, announcement, free_quota, registration_enabled, resend_api_key, email_from, updated_at FROM admin_settings WHERE id = 1');
+      const { rows } = await pool.query('SELECT site_name, announcement, free_quota, registration_enabled, resend_api_key, email_from, analysis_concurrency, updated_at FROM admin_settings WHERE id = 1');
       return rows[0] || null;
     },
     async updateSettings(patch = {}) {
@@ -213,6 +214,7 @@ export function createPgStore() {
       if ('registrationEnabled' in patch) push('registration_enabled', Boolean(patch.registrationEnabled));
       if ('resendApiKey' in patch) push('resend_api_key', patch.resendApiKey || null);
       if ('emailFrom' in patch) push('email_from', patch.emailFrom || null);
+      if ('analysisConcurrency' in patch) push('analysis_concurrency', patch.analysisConcurrency);
       if (!fields.length) return;
       await pool.query('UPDATE admin_settings SET ' + fields.join(', ') + ', updated_at = now() WHERE id = 1', values);
     },

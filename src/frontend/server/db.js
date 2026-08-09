@@ -81,6 +81,7 @@ VALUES (1, '岗位镜管理后台', now())
 ON CONFLICT (id) DO NOTHING;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS resend_api_key text;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS email_from text;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS analysis_concurrency integer NOT NULL DEFAULT 2;
 CREATE TABLE IF NOT EXISTS ai_models (
   id uuid PRIMARY KEY,
   provider text NOT NULL,
@@ -206,8 +207,40 @@ export function createPgStore() {
       const { rows } = await pool.query('SELECT * FROM ai_keys WHERE is_default = true AND enabled = true LIMIT 1');
       return rows[0] || null;
     },
+    async updateReportFields(id, patch) {
+      const REPORT_FIELD_MAP = {
+        accessToken: 'access_token',
+        companyShortName: 'company_short_name',
+        jobTitle: 'job_title',
+        jobText: 'job_text',
+        reportName: 'report_name',
+        status: 'status',
+        emailStatus: 'email_status',
+        report: 'report',
+        usage: 'usage',
+        costUsd: 'cost_usd',
+        costSource: 'cost_source',
+        emailSentTimes: 'email_sent_times',
+        deletedAt: 'deleted_at',
+        reanalyzedAt: 'reanalyzed_at',
+        updatedAt: 'updated_at',
+      };
+      const sets = [];
+      const values = [];
+      for (const [key, col] of Object.entries(REPORT_FIELD_MAP)) {
+        if (!(key in patch)) continue;
+        let val = patch[key];
+        if (key === 'report' || key === 'usage') val = val == null ? null : JSON.stringify(val);
+        if (key === 'emailSentTimes') val = JSON.stringify(Array.isArray(val) ? val : []);
+        sets.push(col + ' = $' + (sets.length + 1));
+        values.push(val);
+      }
+      if (!sets.length) return;
+      values.push(id);
+      await pool.query('UPDATE app_reports SET ' + sets.join(', ') + ' WHERE id = $' + values.length, values);
+    },
     async getAppSettings() {
-      const { rows } = await pool.query('SELECT site_name, resend_api_key, email_from FROM admin_settings WHERE id = 1');
+      const { rows } = await pool.query('SELECT site_name, resend_api_key, email_from, analysis_concurrency FROM admin_settings WHERE id = 1');
       return rows[0] || null;
     }
   };

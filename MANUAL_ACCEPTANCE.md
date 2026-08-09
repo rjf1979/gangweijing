@@ -125,7 +125,7 @@
   4. 恢复 deleted_at=NULL 后报告重新出现（可恢复性验证）
 - 线上前端资源确认：PC 端 /pc/ 引用 index-CbHnzDPj.js，admin /admin/ 引用 index-CloOjCes.js，均 200
 
-## 2026-08-09 · 报告邮件重发 + 重新分析 10 分钟冷却（已开发，待上线）
+## 2026-08-09 · 报告邮件重发 + 重新分析 10 分钟冷却（已上线）
 
 **环境**：https://gwj.zhicha.io（PC 端）
 
@@ -145,3 +145,8 @@
 - 冷却剩余秒数由服务端下发（列表字段 emailResendWaitSeconds / reanalyzeWaitSeconds），前端按秒数置灰，服务端强制兜底禁止绕过
 - 重新分析成功会同时记录源报告与新生成报告的 reanalyzed_at，防止链式连续重分析刷成本
 - 首次生成报告（/api/analyze）不受 10 分钟冷却限制，仅限「重新分析」操作
+
+### 线上验证结果（2026-08-09 已发布上线）
+- 已部署：主服务 release 20260809023004（server.js/db.js + public/pc 新产物 index-BySJ4DHR.js + index-Cilf_UST.css），PM2 gangweijing delete+start，服务 online
+- 冒烟：GET /、/pc/、新 JS 均 200；https 全部 200；app_releases 幂等 ALTER 已创建 reanalyzed_at 列
+- 部署内容核验：新 release 的 server.js 含 REANALYZE_MIN_INTERVAL_MS/emailResendWaitSeconds/reanalyzeWaitSeconds/REANALYZE_INTERVAL_LIMIT；前端 JS 含冷却逻辑关键字；DB 列 email_sent_times + reanalyzed_at 均存在
