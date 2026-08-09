@@ -150,3 +150,28 @@
 - 已部署：主服务 release 20260809023004（server.js/db.js + public/pc 新产物 index-BySJ4DHR.js + index-Cilf_UST.css），PM2 gangweijing delete+start，服务 online
 - 冒烟：GET /、/pc/、新 JS 均 200；https 全部 200；app_releases 幂等 ALTER 已创建 reanalyzed_at 列
 - 部署内容核验：新 release 的 server.js 含 REANALYZE_MIN_INTERVAL_MS/emailResendWaitSeconds/reanalyzeWaitSeconds/REANALYZE_INTERVAL_LIMIT；前端 JS 含冷却逻辑关键字；DB 列 email_sent_times + reanalyzed_at 均存在
+
+## 2026-08-09 · 后台公告前端展示 + 记录用户已知悉（待上线）
+
+**环境**：https://gwj.zhicha.io（PC 端）
+
+### 开发要求（长期有效，禁止回退）
+- 管理后台「系统设置 → 公告内容」填写后，PC 前端登录用户需看到公告。
+- 用户点击「我知道了」后记录该用户已读（app_users.announcement_ack_at）；公告内容更新后，用户需重新确认一次。
+- 公告为空时前端不弹窗、不干扰用户。H5 不开发，不涉及。
+
+### 确认项 1：公告展示
+- 操作：管理后台填写公告内容并保存 → PC 端登录用户进入首页
+- 预期：弹出公告弹窗，完整展示后台填写的公告内容，仅提供「我知道了」按钮（无关闭跳过）
+
+### 确认项 2：已知悉记录
+- 操作：点击「我知道了」→ 关闭弹窗后刷新页面 / 重新登录
+- 预期：不再弹公告；数据库 app_users.announcement_ack_at 已写入
+
+### 确认项 3：公告更新后重新确认
+- 操作：后台修改公告内容并保存 → 用户重新登录（或刷新）
+- 预期：公告弹窗再次出现，需再次点击「我知道了」
+
+### 确认项 4：公告为空不弹
+- 操作：后台公告内容清空保存 → 用户登录
+- 预期：无公告弹窗，正常使用

@@ -1135,3 +1135,47 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
 .occupation-banner { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .occupation-banner-head { flex: 0 0 auto; font-size: 14px; }
 .occupation-banner-text { flex: 1 1 auto; min-width: 0; }
+
+/* ===== 公告弹窗（后台公告内容 + 用户已知悉） ===== */
+.announcement-mask {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--layer-loading) + 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: var(--color-scrim);
+}
+.announcement-dialog {
+  width: min(600px, 100%);
+  max-height: 80dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-hard-md);
+}
+.announcement-title {
+  margin: 0;
+  padding: var(--space-3) var(--space-5);
+  font-size: 20px;
+  font-weight: 800;
+  border-bottom: var(--border-thin);
+  background: var(--color-lime);
+}
+.announcement-body {
+  padding: var(--space-5);
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--color-ink);
+}
+.announcement-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-4) var(--space-5);
+  border-top: var(--border-thin);
+  background: var(--color-surface-muted);
+}

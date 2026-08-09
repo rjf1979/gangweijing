@@ -39,6 +39,7 @@ ON CONFLICT (id) DO NOTHING;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS resend_api_key text;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS email_from text;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS analysis_concurrency integer NOT NULL DEFAULT 2;
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS announcement_updated_at timestamptz;
 -- 自愈：历史编码问题可能导致默认站点名被写成问号/空，启动时自动重置为默认值（不覆盖用户后期修改）
 CREATE TABLE IF NOT EXISTS ai_models (
   id uuid PRIMARY KEY,
@@ -201,7 +202,7 @@ export function createPgStore() {
 
     // ===== 站点设置 =====
     async getSettings() {
-      const { rows } = await pool.query('SELECT site_name, announcement, free_quota, registration_enabled, resend_api_key, email_from, analysis_concurrency, updated_at FROM admin_settings WHERE id = 1');
+      const { rows } = await pool.query('SELECT site_name, announcement, announcement_updated_at, free_quota, registration_enabled, resend_api_key, email_from, analysis_concurrency, updated_at FROM admin_settings WHERE id = 1');
       return rows[0] || null;
     },
     async updateSettings(patch = {}) {
@@ -209,7 +210,7 @@ export function createPgStore() {
       const values = [];
       const push = (col, val) => { fields.push(col + ' = $' + (fields.length + 1)); values.push(val); };
       if ('siteName' in patch) push('site_name', patch.siteName);
-      if ('announcement' in patch) push('announcement', patch.announcement);
+      if ('announcement' in patch) { push('announcement', patch.announcement); push('announcement_updated_at', new Date().toISOString()); }
       if ('freeQuota' in patch) push('free_quota', patch.freeQuota);
       if ('registrationEnabled' in patch) push('registration_enabled', Boolean(patch.registrationEnabled));
       if ('resendApiKey' in patch) push('resend_api_key', patch.resendApiKey || null);

@@ -6,6 +6,7 @@
   </main>
   <SiteFooter />
   <AppLoading />
+  <AnnouncementDialog />
 </template>
 
 <script setup>
@@ -14,6 +15,7 @@ import { useRouter } from 'vue-router'
 import SiteHeader from './components/SiteHeader.vue'
 import SiteFooter from './components/SiteFooter.vue'
 import AppLoading from './components/AppLoading.vue'
+import AnnouncementDialog from './components/AnnouncementDialog.vue'
 import { store, refreshSession, hideLoading } from './store'
 
 const router = useRouter()

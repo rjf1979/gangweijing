@@ -26,7 +26,7 @@ await dbStore.init();
 const readDb = () => dbStore.readDb();
 const saveDb = db => dbStore.saveDb(db);
 // 后台配置（admin_settings 数据库）：邮件配置优先于环境变量兜底，保存后立即生效；AI 凭证由 ai_keys / ai_models 提供
-const appConfig = { resendApiKey: '', emailFrom: '', analysisConcurrency: 2 };
+const appConfig = { resendApiKey: '', emailFrom: '', analysisConcurrency: 2, announcement: '', announcementUpdatedAt: null };
 // ===== 后台排队分析：所有岗位分析（首次+重新分析）统一入队，按系统配置的并发数执行 =====
 const analysisQueue = []; // 待处理任务（先进先出）
 let analysisWorkers = []; // 活跃 worker 列表
@@ -111,6 +111,8 @@ async function refreshAppConfig() {
     if (row) {
       appConfig.resendApiKey = row.resend_api_key || '';
       appConfig.emailFrom = row.email_from || '';
+      appConfig.announcement = row.announcement || '';
+      appConfig.announcementUpdatedAt = row.announcement_updated_at ? new Date(row.announcement_updated_at).toISOString() : null;
       const n = parseInt(row.analysis_concurrency, 10);
       if (Number.isFinite(n) && n > 0) appConfig.analysisConcurrency = Math.min(n, 10);
     }
@@ -388,6 +390,25 @@ app.post('/api/register', async (req, res) => {
 });
 app.post('/api/login', async (req, res) => { const { email, password } = req.body; const db = await readDb(); db.sessions ||= []; const user = db.users.find(x => x.email === String(email || '').trim().toLowerCase() && x.passwordHash === hash(password || '')); if (!user) return res.status(401).json({ error: '邮箱或密码不正确。' }); const token = crypto.randomBytes(32).toString('hex'); db.sessions.push({ token, userId: user.id, expiresAt: new Date(Date.now() + 30 * 86400000).toISOString() }); await saveDb(db); res.setHeader('Set-Cookie', sessionCookie(token)); res.json({ user: { id: user.id, email: user.email, emailVerified: Boolean(user.emailVerifiedAt) } }); });
 app.get('/api/session', async (req, res) => { const db = await readDb(); const session = currentSession(req, db); const user = session && db.users.find(x => x.id === session.userId); res.json({ authenticated: Boolean(user), user: user ? { id: user.id, email: user.email, emailVerified: Boolean(user.emailVerifiedAt) } : null }); });
+
+app.get('/api/config', async (req, res) => {
+  await refreshAppConfig(); // 每次读取最新后台配置，公告修改后无需重启即生效
+  const db = await readDb();
+  const user = currentUser(req, db);
+  res.json({
+    announcement: appConfig.announcement || '',
+    announcementUpdatedAt: appConfig.announcementUpdatedAt || null,
+    announcementAckAt: user ? (user.announcementAckAt || null) : null,
+  });
+});
+app.post('/api/announcement/ack', async (req, res) => {
+  const db = await readDb();
+  const user = currentUser(req, db);
+  if (!user) return res.status(401).json({ error: '请先登录。' });
+  user.announcementAckAt = new Date().toISOString();
+  await saveDb(db);
+  res.json({ acknowledgedAt: user.announcementAckAt });
+});
 app.post('/api/verification-email', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); if (user.emailVerifiedAt) return res.json({ verified: true }); const elapsed = Date.now() - new Date(user.verificationSentAt || 0).getTime(); if (elapsed < 60000) return res.status(429).json({ error: `请在 ${Math.ceil((60000 - elapsed) / 1000)} 秒后重试。` }); const token = issueVerification(user); await saveDb(db); try { user.verificationMessageId = await sendVerificationEmail(user.email, token); user.verificationEmailStatus = 'sent'; delete user.verificationEmailError; await saveDb(db); res.json({ sent: true }); } catch (error) { user.verificationEmailStatus = 'failed'; user.verificationEmailError = error.message; await saveDb(db); res.status(502).json({ error: `验证邮件发送失败：${error.message}` }); } });
 app.post('/api/verify-email', async (req, res) => { const token = String(req.body?.token || ''); if (!token) return res.status(400).json({ error: '验证链接无效。' }); const db = await readDb(); const tokenHash = verificationHash(token); const user = db.users.find(item => item.emailVerificationTokenHash === tokenHash); if (!user || !user.emailVerificationExpiresAt || new Date(user.emailVerificationExpiresAt) <= new Date()) return res.status(400).json({ error: '验证链接无效或已过期，请重新发送。' }); user.emailVerifiedAt = new Date().toISOString(); delete user.emailVerificationTokenHash; delete user.emailVerificationExpiresAt; delete user.verificationEmailError; user.verificationEmailStatus = 'verified'; await saveDb(db); res.json({ verified: true, email: user.email }); });
 app.get('/api/resume', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); res.json({ hasResume: Boolean(user.resumeText), factsConfirmed: Boolean(user.factsConfirmedAt), text: maskResumePII(user.resumeText || ''), masked: true, maskedFields: user.resumeMaskedFields && user.resumeMaskedFields.length ? user.resumeMaskedFields : detectMaskedFields(maskResumePII(user.resumeText || '')), updatedAt: user.resumeUpdatedAt || user.createdAt, structured: (() => { let st = user.resumeStructured || null; if (st && !st.occupation) st = withOccupation(st, maskResumePII(user.resumeText || '')); return st; })(), structuredAt: user.resumeStructuredAt || null, resumeFile: user.resumeFilePath ? { name: user.resumeFileName || '简历文件', mime: user.resumeFileMime || 'application/octet-stream', size: user.resumeFileSize || 0, uploadedAt: user.resumeFileUploadedAt || null } : null }); });
