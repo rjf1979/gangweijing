@@ -316,7 +316,6 @@ const publicAppUrl = () => {
 };
 const EMAIL_MIN_INTERVAL_MS = 10 * 60 * 1000; // 两次发送至少间隔 10 分钟
 const EMAIL_MAX_DAILY = 5; // 同一报告一天最多发送 5 次
-const REANALYZE_MIN_INTERVAL_MS = 10 * 60 * 1000; // 同一报告重新分析至少间隔 10 分钟
 
 // 按 Asia/Shanghai 时区返回 YYYY-MM-DD，用于“一天最多 5 次”的日界判断
 function shanghaiDateKey(iso) {
@@ -721,13 +720,9 @@ app.post('/api/reports/:id/reanalyze', async (req, res) => {
   if (!record || record.deletedAt) return res.status(404).json({ error: '报告不存在或无权访问。' });
   if (!record.jobText) return res.status(400).json({ error: '该报告缺少岗位内容，无法重新分析。' });
   if (!user.resumeText) return res.status(400).json({ error: '请先保存简历后再重新分析。' });
+  if (record.reanalyzedAt) return res.status(429).json({ error: '该报告已使用过重新分析机会。', code: 'REANALYZE_ALREADY_USED' });
   const now = Date.now();
-  const lastReanalyzeAt = record.reanalyzedAt ? new Date(record.reanalyzedAt).getTime() : 0;
-  if (lastReanalyzeAt && now - lastReanalyzeAt < REANALYZE_MIN_INTERVAL_MS) {
-    const waitMin = Math.max(1, Math.ceil((REANALYZE_MIN_INTERVAL_MS - (now - lastReanalyzeAt)) / 60000));
-    return res.status(429).json({ error: `重新分析过于频繁，请至少间隔 10 分钟，约 ${waitMin} 分钟后再试。`, code: 'REANALYZE_INTERVAL_LIMIT' });
-  }
-  // 后台排队分析：创建“分析中”占位记录并入队，任务由 worker 异步完成；入队即记录冷却，防链式连点
+  // 后台排队分析：创建“分析中”占位记录并入队，任务由 worker 异步完成；入队即标记已用机会，该报告不再提供重新分析
   const reanalyzedAt = new Date(now).toISOString();
   record.reanalyzedAt = reanalyzedAt;
   record.updatedAt = reanalyzedAt;
@@ -797,8 +792,8 @@ app.delete('/api/reports/:id', async (req, res) => {
   res.json({ ok: true, deleted: record.id });
 });
 
-app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = publicAppUrl(); const owned = db.reports.filter(item => !item.deletedAt && (item.userId === user.id || (!item.userId && item.email === user.email))); const reports = owned.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => { const emailStats = emailSendStats(item); return ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null, canReanalyze: Boolean(item.jobText), canResendEmail: Boolean(item.email), emailSentToday: emailStats.todayCount, emailMaxToday: EMAIL_MAX_DAILY, emailResendWaitSeconds: remainingWaitSeconds(emailStats.lastAt, EMAIL_MIN_INTERVAL_MS), reanalyzeWaitSeconds: remainingWaitSeconds(item.reanalyzedAt || null, REANALYZE_MIN_INTERVAL_MS) }); }); const jobKeys = new Set(owned.map(item => `${item.companyShortName || ''}|${item.jobTitle || ''}`).filter(key => key !== '|')); res.json({ reports, stats: { jobs: jobKeys.size, reports: owned.length } }); });
-app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record || record.deletedAt) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, status: record.status || 'completed', report: record.report, jobOccupation: record.jobOccupation || null, resumeOccupation: record.resumeOccupation || null, canReanalyze: Boolean(record.jobText), reanalyzeWaitSeconds: remainingWaitSeconds(record.reanalyzedAt || null, REANALYZE_MIN_INTERVAL_MS) }); });
+app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = publicAppUrl(); const owned = db.reports.filter(item => !item.deletedAt && (item.userId === user.id || (!item.userId && item.email === user.email))); const reports = owned.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => { const emailStats = emailSendStats(item); return ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null, canReanalyze: Boolean(item.jobText) && !item.reanalyzedAt, canResendEmail: Boolean(item.email), emailSentToday: emailStats.todayCount, emailMaxToday: EMAIL_MAX_DAILY, emailResendWaitSeconds: remainingWaitSeconds(emailStats.lastAt, EMAIL_MIN_INTERVAL_MS) }); }); const jobKeys = new Set(owned.map(item => `${item.companyShortName || ''}|${item.jobTitle || ''}`).filter(key => key !== '|')); res.json({ reports, stats: { jobs: jobKeys.size, reports: owned.length } }); });
+app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record || record.deletedAt) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, status: record.status || 'completed', report: record.report, jobOccupation: record.jobOccupation || null, resumeOccupation: record.resumeOccupation || null, canReanalyze: Boolean(record.jobText) && !record.reanalyzedAt }); });
 // 旧 URL -> uni-app H5 页面重定向（邮件链接与旧书签不失效）
 app.get('/report/:token', (req, res) => {
   if (isMobileUA(req.headers['user-agent'])) return res.redirect('/#/pages/report/detail?token=' + encodeURIComponent(req.params.token));

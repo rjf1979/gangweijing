@@ -33,7 +33,7 @@
           <span class="mail" :class="'mail-' + item.emailStatus">邮件：{{ mailLabel[item.emailStatus] || item.emailStatus }}<template v-if="item.emailSentToday">（今日 {{ item.emailSentToday }}/{{ item.emailMaxToday }}）</template></span>
           <div class="row-actions">
             <button v-if="item.canResendEmail" class="neo-button neo-button-secondary report-resend-email" type="button" :disabled="resendingId === item.id || emailLimitReached(item) || emailCooldown(item)" :title="emailLimitReached(item) ? '今日发送已达上限' : (emailCooldown(item) ? emailWaitText(item) : '')" @click.prevent.stop="resendEmail(item)">{{ resendingId === item.id ? '发送中…' : '重新通知' }}</button>
-            <button v-if="item.canReanalyze" class="neo-button neo-button-secondary report-reanalyze" type="button" :disabled="reanalyzingId === item.id || reanalyzeCooldown(item)" :title="reanalyzeCooldown(item) ? reanalyzeWaitText(item) : ''" @click.prevent.stop="reanalyze(item)">{{ reanalyzingId === item.id ? '分析中…' : '重新分析' }}</button>
+            <button v-if="item.canReanalyze" class="neo-button neo-button-secondary report-reanalyze" type="button" :disabled="reanalyzingId === item.id" @click.prevent.stop="reanalyze(item)">{{ reanalyzingId === item.id ? '分析中…' : '重新分析' }}</button>
             <button class="neo-button neo-button-secondary report-delete" type="button" :disabled="deletingId === item.id" @click.prevent.stop="deleteReport(item)">{{ deletingId === item.id ? '删除中…' : '删除' }}</button>
           </div>
         </router-link>
@@ -117,13 +117,6 @@ function emailCooldown(item) {
 function emailWaitText(item) {
   return `距上次发送不足 10 分钟，约 ${Math.ceil((item.emailResendWaitSeconds || 0) / 60)} 分钟后可再次发送`
 }
-function reanalyzeCooldown(item) {
-  return (item.reanalyzeWaitSeconds || 0) > 0
-}
-function reanalyzeWaitText(item) {
-  return `距上次重新分析不足 10 分钟，约 ${Math.ceil((item.reanalyzeWaitSeconds || 0) / 60)} 分钟后可再次重新分析`
-}
-
 async function resendEmail(item) {
   if (resendingId.value) return
   resendingId.value = item.id
