@@ -10,7 +10,7 @@
       <span class="neo-step" :class="{ active: active === 'report' }"><b>04</b><em>报告</em></span>
     </nav>
 
-    <StepResume v-if="active === 'resume'" @next="go('facts')" />
+    <StepResume v-if="active === 'resume'" @next="onResumeNext" />
     <StepFacts v-else-if="active === 'facts'" @next="go('job')" @back="go('resume')" />
     <StepJob v-else-if="active === 'job'" @next="go('report')" @back="go('facts')" />
     <StepReport v-else-if="active === 'report'" @back="go('job')" />
@@ -54,6 +54,15 @@ function ensureStep() {
 
 function go(step) {
   router.push('/' + step)
+}
+
+// 「更新简历」入口（?mode=replace）提交后直接返回展示简历，不再进入岗位分析流程
+function onResumeNext() {
+  if (route.query.mode === 'replace') {
+    router.replace('/my-resume')
+    return
+  }
+  go('facts')
 }
 
 watch([() => props.step, () => route.query.mode], ensureStep)

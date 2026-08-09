@@ -15,6 +15,8 @@ export const store = reactive({
   email: '',
   booted: false,       // 首屏初始化是否完成（之后路由切换才显示「正在切换页面」）
   redirectAfterLogin: null,
+  guideChecked: false,   // 首次全流程引导状态是否已加载（有报告=已完成全流程）
+  hasAnyReport: false,   // 是否已生成过至少一份分析报告
   draft: readDraft(),
   loading: false,
   loadingTitle: '正在加载',

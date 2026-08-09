@@ -1,5 +1,6 @@
 ﻿// 岗位镜 PC 版路由：恢复第一版 PC 单页流程（pathname 路由，history 模式）
 import { createRouter, createWebHistory } from 'vue-router'
+import { api } from './api'
 import { store, refreshSession, showLoading, hideLoading } from './store'
 import WelcomeView from './views/WelcomeView.vue'
 import HomeView from './views/HomeView.vue'
@@ -33,6 +34,24 @@ const router = createRouter({
   scrollBehavior() { return { top: 0 } },
 })
 
+// 首次全流程引导：仅当「未生成过任何报告」时进入首页才引导（完成过一次全流程后正常进首页）
+let guidePromise = null
+async function loadGuideState() {
+  if (store.guideChecked) return
+  if (guidePromise) return guidePromise
+  guidePromise = (async () => {
+    try {
+      const data = await api.get('/api/reports')
+      store.hasAnyReport = (data.stats?.reports || 0) > 0
+    } catch {
+      // 读取失败按「已完成」处理，避免把用户卡在引导循环里
+      store.hasAnyReport = true
+    }
+    store.guideChecked = true
+  })().finally(() => { guidePromise = null })
+  return guidePromise
+}
+
 router.beforeEach(async (to, from) => {
   // 路由切换统一显示「正在切换页面」过渡层（最短 0.5 秒，由 hideLoading 保证）
   if (from.path !== to.path && store.booted) {
@@ -47,6 +66,13 @@ router.beforeEach(async (to, from) => {
   }
   if (to.meta.requiresAuth && store.authenticated && !store.user?.emailVerified) {
     return { path: '/verify' }
+  }
+  // 首次引导：未完成过一次全流程（尚无任何报告）时，进入首页默认引导走全流程
+  if (to.path === '/' && store.authenticated && store.user?.emailVerified) {
+    await loadGuideState()
+    if (!store.hasAnyReport) {
+      return { path: '/resume' }
+    }
   }
   return true
 })

@@ -8,6 +8,7 @@
       <nav v-if="store.authenticated" class="header-actions" aria-label="账户内容">
         <span class="user-nickname" :title="emailPrefix" :aria-label="`当前登录用户：${emailPrefix}`">{{ displayName }}</span>
         <router-link to="/my-resume">我的简历</router-link>
+        <router-link to="/job">岗位分析</router-link>
         <router-link to="/reports">我的报告</router-link>
       </nav>
     </div>
