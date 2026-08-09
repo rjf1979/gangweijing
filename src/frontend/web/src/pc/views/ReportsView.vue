@@ -42,7 +42,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
-import { store, showLoading, hideLoading, saveDraft } from '../store'
+import { store, showLoading, hideLoading, saveDraft, clearJobDraft } from '../store'
 
 const router = useRouter()
 const filter = ref('all')
@@ -64,6 +64,7 @@ const rows = computed(() => {
 async function startNewAnalysis() {
   if (starting.value) return
   starting.value = true
+  clearJobDraft() // 每次「分析新岗位」都是全新分析：清空上次岗位草稿
   showLoading('正在切换页面', '正在确认你的简历状态')
   try {
     const data = await api.get('/api/resume')

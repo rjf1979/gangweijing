@@ -158,18 +158,23 @@ button { letter-spacing: 0; }
   white-space: nowrap;
 }
 
-.header-actions a {
+.header-actions a,
+.header-actions button {
   display: inline-flex;
   min-height: 44px;
   align-items: center;
   padding: 0 var(--space-3);
   border: 2px solid transparent;
+  background: none;
+  color: inherit;
   font-size: 14px;
   font-weight: 800;
   text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
 }
-.header-actions a:hover { border-color: var(--color-ink); background: var(--color-yellow); }
+.header-actions a:hover,
+.header-actions button:hover { border-color: var(--color-ink); background: var(--color-yellow); }
 
 main { width: 100%; flex: 1 0 auto; }
 .site-footer {
@@ -1050,7 +1055,8 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
   .brand { font-size: 16px; }
   .brand-mark { width: 32px; height: 32px; }
   .header-actions { gap: 0; }
-  .header-actions a { padding: 0 7px; font-size: 13px; }
+  .header-actions a,
+  .header-actions button { padding: 0 7px; font-size: 13px; }
   .user-nickname { max-width: 10ch; font-size: 13px; }
   .welcome { padding: 36px 0 56px; }
   .home-dashboard { padding: var(--space-5) 0 56px; }
@@ -1096,7 +1102,8 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
 
 @media (max-width: 390px) {
   .brand-mark { display: none; }
-  .header-actions a { padding-inline: 5px; }
+  .header-actions a,
+  .header-actions button { padding-inline: 5px; }
   .feature-strip li { flex: 1 1 calc(50% - var(--space-2)); text-align: center; }
 }
 

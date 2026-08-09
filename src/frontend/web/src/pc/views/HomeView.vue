@@ -9,7 +9,7 @@
           <strong>{{ nextAction.title }}</strong>
           <p>{{ nextAction.description }}</p>
         </div>
-        <router-link class="neo-button neo-button-primary" :to="nextAction.to">{{ nextAction.label }}</router-link>
+        <router-link class="neo-button neo-button-primary" :to="nextAction.to" @click="onNextAction">{{ nextAction.label }}</router-link>
       </div>
     </article>
 
@@ -57,7 +57,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
-import { saveDraft, store } from '../store'
+import { saveDraft, clearJobDraft, store } from '../store'
 
 const reports = ref([])
 const stats = ref({ jobs: 0, reports: 0 })
@@ -78,6 +78,13 @@ const nextAction = computed(() => {
   if (!factsConfirmed.value) return { title: '确认简历事实', description: '核对简历中的职业事实，确保 AI 分析基于真实信息。', label: '确认事实', to: '/facts' }
   return { title: '录入目标岗位', description: '填写目标岗位信息，生成 AI 匹配分析报告。', label: '录入岗位', to: '/job' }
 })
+
+// 每次从首页「录入岗位」进入都视为全新分析：清空上次岗位草稿，岗位表单保持空白
+function onNextAction() {
+  if (nextAction.value.to === '/job') {
+    clearJobDraft()
+  }
+}
 
 function formatDate(value) {
   if (!value) return ''

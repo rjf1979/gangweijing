@@ -19,7 +19,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
-import { store, refreshSession, maskedEmail, showLoading, hideLoading } from '../store'
+import { store, refreshSession, maskedEmail, showLoading, hideLoading, clearJobDraft } from '../store'
 
 const props = defineProps({
   mode: { type: String, default: 'notice' }, // notice | verify-link
@@ -53,7 +53,12 @@ async function continueApp() {
     hasResume = Boolean(data.hasResume)
   } catch { /* 忽略，按无简历处理 */ }
   hideLoading()
-  router.replace(hasResume ? '/job' : '/resume')
+  if (hasResume) {
+    clearJobDraft() // 验证后进入岗位分析视为全新分析：清空上次岗位草稿
+    router.replace('/job')
+  } else {
+    router.replace('/resume')
+  }
 }
 
 async function resend() {

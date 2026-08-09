@@ -29,6 +29,12 @@ export function saveDraft(patch) {
   sessionStorage.setItem(DRAFT_KEY, JSON.stringify(store.draft))
 }
 
+// 开始一次全新的岗位分析：清空上次岗位草稿（职位描述/公司简称/岗位名称），
+// 保证从页头「岗位分析」等入口进入时岗位表单始终是空白，不会读到旧岗位信息。
+export function clearJobDraft() {
+  saveDraft({ jobText: '', companyShortName: '', jobTitle: '' })
+}
+
 let hideTimer = null
 
 export function showLoading(title = '正在加载', tip = '请稍候，马上进入正确页面') {

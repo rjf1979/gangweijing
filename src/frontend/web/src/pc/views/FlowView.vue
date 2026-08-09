@@ -10,10 +10,10 @@
       <span class="neo-step" :class="{ active: active === 'report' }"><b>04</b><em>报告</em></span>
     </nav>
 
-    <StepResume v-if="active === 'resume'" @next="onResumeNext" />
-    <StepFacts v-else-if="active === 'facts'" @next="go('job')" @back="go('resume')" />
-    <StepJob v-else-if="active === 'job'" @next="go('report')" @back="go('facts')" />
-    <StepReport v-else-if="active === 'report'" @back="go('job')" />
+    <StepResume v-if="active === 'resume'" :key="route.fullPath" @next="onResumeNext" />
+    <StepFacts v-else-if="active === 'facts'" :key="route.fullPath" @next="go('job')" @back="go('resume')" />
+    <StepJob v-else-if="active === 'job'" :key="route.fullPath" @next="go('report')" @back="go('facts')" />
+    <StepReport v-else-if="active === 'report'" :key="route.fullPath" @back="go('job')" />
   </section>
 </template>
 
