@@ -27,6 +27,83 @@ const readDb = () => dbStore.readDb();
 const saveDb = db => dbStore.saveDb(db);
 // 后台配置（admin_settings 数据库）：邮件配置优先于环境变量兜底，保存后立即生效；AI 凭证由 ai_keys / ai_models 提供
 const appConfig = { resendApiKey: '', emailFrom: '', analysisConcurrency: 2 };
+// ===== 后台排队分析：所有岗位分析（首次+重新分析）统一入队，按系统配置的并发数执行 =====
+const analysisQueue = []; // 待处理任务（先进先出）
+let analysisWorkers = []; // 活跃 worker 列表
+const ANALYSIS_MAX_WORKERS = 10;
+function analysisWorkerTarget() {
+  const n = parseInt(appConfig.analysisConcurrency, 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, ANALYSIS_MAX_WORKERS) : 2;
+}
+async function runAnalysisWorker(worker) {
+  while (worker.running) {
+    const task = analysisQueue.shift();
+    if (!task) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      continue;
+    }
+    try {
+      await processAnalysisTask(task);
+    } catch (error) {
+      console.error('分析任务异常：', task.reportId, error.message);
+      try { await dbStore.updateReportFields(task.reportId, { status: 'failed', emailStatus: 'unknown', updatedAt: new Date().toISOString() }); } catch {}
+    }
+  }
+}
+function syncAnalysisWorkers() {
+  const target = analysisWorkerTarget();
+  while (analysisWorkers.length < target) {
+    const worker = { running: true };
+    analysisWorkers.push(worker);
+    runAnalysisWorker(worker);
+  }
+  if (analysisWorkers.length > target) {
+    analysisWorkers.slice(target).forEach(worker => { worker.running = false; });
+    analysisWorkers = analysisWorkers.slice(0, target);
+  }
+}
+async function processAnalysisTask(task) {
+  const db = await readDb();
+  const record = db.reports.find(item => item.id === task.reportId);
+  if (!record || record.deletedAt) return; // 已删除，忽略
+  const user = db.users.find(item => item.id === task.userId);
+  if (!user || !user.resumeText) {
+    await dbStore.updateReportFields(record.id, { status: 'failed', emailStatus: 'unknown', updatedAt: new Date().toISOString() });
+    return;
+  }
+  const { record: result } = await generateReport({
+    user: { id: user.id, email: user.email, resumeText: user.resumeText, resumeStructured: user.resumeStructured },
+    resumeText: task.resumeText || user.resumeText,
+    jobText: task.jobText,
+    jobTitle: task.jobTitle,
+    companyShortName: task.companyShortName,
+    baseRecord: record,
+  });
+  await dbStore.updateReportFields(record.id, {
+    status: 'completed',
+    reportName: result.reportName,
+    companyShortName: result.companyShortName,
+    jobTitle: result.jobTitle,
+    report: result.report,
+    emailStatus: result.emailStatus,
+    emailSentTimes: result.emailSentTimes || [],
+    usage: result.usage || null,
+    costUsd: result.costUsd,
+    costSource: result.costSource || null,
+    updatedAt: result.updatedAt,
+  });
+}
+async function recoverStaleAnalyzing() {
+  try {
+    const db = await readDb();
+    let dirty = false;
+    const nowIso = new Date().toISOString();
+    for (const item of db.reports) {
+      if (item.status === 'analyzing') { item.status = 'failed'; item.updatedAt = nowIso; dirty = true; }
+    }
+    if (dirty) await saveDb(db);
+  } catch (error) { console.error('恢复遗留分析任务失败：', error.message); }
+}
 await refreshAppConfig();
 async function refreshAppConfig() {
   try {
@@ -239,83 +316,6 @@ const EMAIL_MIN_INTERVAL_MS = 10 * 60 * 1000; // 两次发送至少间隔 10 分
 const EMAIL_MAX_DAILY = 5; // 同一报告一天最多发送 5 次
 const REANALYZE_MIN_INTERVAL_MS = 10 * 60 * 1000; // 同一报告重新分析至少间隔 10 分钟
 
-// ===== 后台排队分析：所有岗位分析（首次+重新分析）统一入队，按系统配置的并发数执行 =====
-const analysisQueue = []; // 待处理任务（先进先出）
-let analysisWorkers = []; // 活跃 worker 列表
-const ANALYSIS_MAX_WORKERS = 10;
-function analysisWorkerTarget() {
-  const n = parseInt(appConfig.analysisConcurrency, 10);
-  return Number.isFinite(n) && n > 0 ? Math.min(n, ANALYSIS_MAX_WORKERS) : 2;
-}
-async function runAnalysisWorker(worker) {
-  while (worker.running) {
-    const task = analysisQueue.shift();
-    if (!task) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      continue;
-    }
-    try {
-      await processAnalysisTask(task);
-    } catch (error) {
-      console.error('分析任务异常：', task.reportId, error.message);
-      try { await dbStore.updateReportFields(task.reportId, { status: 'failed', emailStatus: 'unknown', updatedAt: new Date().toISOString() }); } catch {}
-    }
-  }
-}
-function syncAnalysisWorkers() {
-  const target = analysisWorkerTarget();
-  while (analysisWorkers.length < target) {
-    const worker = { running: true };
-    analysisWorkers.push(worker);
-    runAnalysisWorker(worker);
-  }
-  if (analysisWorkers.length > target) {
-    analysisWorkers.slice(target).forEach(worker => { worker.running = false; });
-    analysisWorkers = analysisWorkers.slice(0, target);
-  }
-}
-async function processAnalysisTask(task) {
-  const db = await readDb();
-  const record = db.reports.find(item => item.id === task.reportId);
-  if (!record || record.deletedAt) return; // 已删除，忽略
-  const user = db.users.find(item => item.id === task.userId);
-  if (!user || !user.resumeText) {
-    await dbStore.updateReportFields(record.id, { status: 'failed', emailStatus: 'unknown', updatedAt: new Date().toISOString() });
-    return;
-  }
-  const { record: result } = await generateReport({
-    user: { id: user.id, email: user.email, resumeText: user.resumeText, resumeStructured: user.resumeStructured },
-    resumeText: task.resumeText || user.resumeText,
-    jobText: task.jobText,
-    jobTitle: task.jobTitle,
-    companyShortName: task.companyShortName,
-    baseRecord: record,
-  });
-  await dbStore.updateReportFields(record.id, {
-    status: 'completed',
-    reportName: result.reportName,
-    companyShortName: result.companyShortName,
-    jobTitle: result.jobTitle,
-    report: result.report,
-    emailStatus: result.emailStatus,
-    emailSentTimes: result.emailSentTimes || [],
-    usage: result.usage || null,
-    costUsd: result.costUsd,
-    costSource: result.costSource || null,
-    updatedAt: result.updatedAt,
-  });
-}
-async function recoverStaleAnalyzing() {
-  try {
-    const db = await readDb();
-    let dirty = false;
-    const nowIso = new Date().toISOString();
-    for (const item of db.reports) {
-      if (item.status === 'analyzing') { item.status = 'failed'; item.updatedAt = nowIso; dirty = true; }
-    }
-    if (dirty) await saveDb(db);
-  } catch (error) { console.error('恢复遗留分析任务失败：', error.message); }
-}
 // 按 Asia/Shanghai 时区返回 YYYY-MM-DD，用于“一天最多 5 次”的日界判断
 function shanghaiDateKey(iso) {
   const d = new Date(iso);
