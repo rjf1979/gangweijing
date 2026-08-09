@@ -180,3 +180,22 @@
 - 已部署：主服务 release 20260809031303（含 GET /api/config 与 POST /api/announcement/ack）+ admin db.js 更新（announcement_updated_at），PM2 gangweijing / gangweijing-admin delete+start，均 online
 - 部署核验：GET /api/config 下发公告内容与 announcementUpdatedAt/announcementAckAt；DB 列 announcement_ack_at（app_users）+ announcement_updated_at（admin_settings）均已创建
 - 说明：生产已有公告内容，历史公告（announcement_updated_at 为空）未确认过的用户登录会弹一次，确认后不再弹；后续公告更新会重新要求确认
+
+
+## 2026-08-09 · 去除邮件配置环境变量兜底（已上线，release 20260809032024）
+
+**环境**：https://gwj.zhicha.io（PC 端 + 管理后台）
+
+### 开发要求（长期有效，禁止回退）
+- 邮件发送（验证邮件 / 报告完成通知 / 重新通知）仅使用后台数据库配置（admin_settings.resend_api_key / email_from），不再读取环境变量 RESEND_API_KEY / EMAIL_FROM 兜底
+- 管理后台「系统设置 → 服务配置状态」仅展示数据库配置，不再展示「环境变量兜底」状态
+- 邮件配置只能通过后台「邮件配置（Resend）」维护；.env 中的 RESEND_API_KEY / EMAIL_FROM 不再生效
+
+### 背景说明（本次问题根因）
+- 用户此前在后台看到的「已配置」实际来自环境变量兜底：生产 .env 配置了 RESEND_API_KEY / EMAIL_FROM，数据库 admin_settings.resend_api_key 一直为空（之前从未在后台保存过）
+- 本次已把 .env 中生效的邮件配置迁移写入数据库：resend_api_key（36 位）+ email_from=report@zhicha.io，去除兜底后邮件功能不中断
+
+### 线上验证结果（2026-08-09 已发布上线，release 20260809032024）
+- 已部署：主服务 release 20260809032024（server.js 去除兜底）+ admin（server.js 移除 environment 下发 + dist 新产物 index-CeLuf8Rc.js），PM2 delete+start 均 online
+- 数据迁移：admin_settings 已写入 resend_api_key（SET len=36）+ email_from=report@zhicha.io，verify 通过
+- 部署核验：主服务 server.js 无 process.env.RESEND_API_KEY / EMAIL_FROM 引用；admin server.js 与 dist 均无 emailEnvConfigured；GET /、/pc/、/admin 均 200
