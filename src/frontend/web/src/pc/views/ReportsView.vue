@@ -34,6 +34,7 @@
           <div class="row-actions">
             <button v-if="item.canResendEmail" class="neo-button neo-button-secondary report-resend-email" type="button" :disabled="resendingId === item.id || emailLimitReached(item)" :title="emailLimitReached(item) ? '今日发送已达上限' : ''" @click.prevent.stop="resendEmail(item)">{{ resendingId === item.id ? '发送中…' : '重新发送邮件' }}</button>
             <button v-if="item.canReanalyze" class="neo-button neo-button-secondary report-reanalyze" type="button" :disabled="reanalyzingId === item.id" @click.prevent.stop="reanalyze(item)">{{ reanalyzingId === item.id ? '分析中…' : '重新分析' }}</button>
+            <button class="neo-button neo-button-secondary report-delete" type="button" :disabled="deletingId === item.id" @click.prevent.stop="deleteReport(item)">{{ deletingId === item.id ? '删除中…' : '删除' }}</button>
           </div>
         </router-link>
       </template>
@@ -55,6 +56,7 @@ const loadError = ref('')
 const starting = ref(false)
 const reanalyzingId = ref(null)
 const resendingId = ref(null)
+const deletingId = ref(null)
 
 const statusLabel = { completed: '已完成', analyzing: '分析中', failed: '失败' }
 const mailLabel = { sent: '已发送', pending: '待发送', failed: '发送失败', not_configured: '未配置', unknown: '未知' }
@@ -123,6 +125,21 @@ async function resendEmail(item) {
 }
 
 // 重新分析：基于原报告的岗位内容 + 用户最新简历生成新报告，完成后跳转新报告
+// 删除报告（软删除）：标记无效，前端过滤不再展示；数据保留在数据库，可恢复
+async function deleteReport(item) {
+  if (deletingId.value) return
+  if (!window.confirm(`确定删除报告「${item.reportName || item.jobTitle || '未命名报告'}」吗？\n删除后将从你的报告列表隐藏，数据保留。`)) return
+  deletingId.value = item.id
+  try {
+    await api.delete('/api/reports/' + item.id)
+    await loadReports()
+  } catch (err) {
+    window.alert('删除失败：' + err.message)
+  } finally {
+    deletingId.value = null
+  }
+}
+
 async function reanalyze(item) {
   if (reanalyzingId.value) return
   reanalyzingId.value = item.id

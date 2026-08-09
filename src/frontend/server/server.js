@@ -584,7 +584,7 @@ app.post('/api/reports/:id/reanalyze', async (req, res) => {
   if (!user) return res.status(401).json({ error: '请先登录。' });
   if (!user.emailVerifiedAt) return res.status(403).json({ error: '请先验证注册邮箱，再生成分析报告。', code: 'EMAIL_NOT_VERIFIED' });
   const record = db.reports.find(item => item.id === req.params.id && (item.userId === user.id || (!item.userId && item.email === user.email)));
-  if (!record) return res.status(404).json({ error: '报告不存在或无权访问。' });
+  if (!record || record.deletedAt) return res.status(404).json({ error: '报告不存在或无权访问。' });
   if (!record.jobText) return res.status(400).json({ error: '该报告缺少岗位内容，无法重新分析。' });
   if (!user.resumeText) return res.status(400).json({ error: '请先保存简历后再重新分析。' });
   try {
@@ -603,7 +603,7 @@ app.post('/api/reports/:id/resend-email', async (req, res) => {
   const user = currentUser(req, db);
   if (!user) return res.status(401).json({ error: '请先登录。' });
   const record = db.reports.find(item => item.id === req.params.id && (item.userId === user.id || (!item.userId && item.email === user.email)));
-  if (!record) return res.status(404).json({ error: '报告不存在或无权访问。' });
+  if (!record || record.deletedAt) return res.status(404).json({ error: '报告不存在或无权访问。' });
   if (!record.email) return res.status(400).json({ error: '该报告没有可用的接收邮箱。' });
   const now = Date.now();
   const todayKey = shanghaiDateKey(new Date(now));
@@ -633,8 +633,22 @@ app.post('/api/reports/:id/resend-email', async (req, res) => {
   }
 });
 
-app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = publicAppUrl(); const owned = db.reports.filter(item => item.userId === user.id || (!item.userId && item.email === user.email)); const reports = owned.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null, canReanalyze: Boolean(item.jobText), canResendEmail: Boolean(item.email), emailSentToday: emailSendStats(item).todayCount, emailMaxToday: EMAIL_MAX_DAILY })); const jobKeys = new Set(owned.map(item => `${item.companyShortName || ''}|${item.jobTitle || ''}`).filter(key => key !== '|')); res.json({ reports, stats: { jobs: jobKeys.size, reports: owned.length } }); });
-app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, report: record.report, jobOccupation: record.jobOccupation || null, resumeOccupation: record.resumeOccupation || null, canReanalyze: Boolean(record.jobText) }); });
+// 删除报告（软删除）：标记无效，用户端前端过滤不再展示；数据保留在数据库，可恢复
+app.delete('/api/reports/:id', async (req, res) => {
+  const db = await readDb();
+  const user = currentUser(req, db);
+  if (!user) return res.status(401).json({ error: '请先登录。' });
+  const record = db.reports.find(item => item.id === req.params.id && (item.userId === user.id || (!item.userId && item.email === user.email)));
+  if (!record || record.deletedAt) return res.status(404).json({ error: '报告不存在或无权访问。' });
+  const now = new Date().toISOString();
+  record.deletedAt = now;
+  record.updatedAt = now;
+  await saveDb(db);
+  res.json({ ok: true, deleted: record.id });
+});
+
+app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = publicAppUrl(); const owned = db.reports.filter(item => !item.deletedAt && (item.userId === user.id || (!item.userId && item.email === user.email))); const reports = owned.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null, canReanalyze: Boolean(item.jobText), canResendEmail: Boolean(item.email), emailSentToday: emailSendStats(item).todayCount, emailMaxToday: EMAIL_MAX_DAILY })); const jobKeys = new Set(owned.map(item => `${item.companyShortName || ''}|${item.jobTitle || ''}`).filter(key => key !== '|')); res.json({ reports, stats: { jobs: jobKeys.size, reports: owned.length } }); });
+app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record || record.deletedAt) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, report: record.report, jobOccupation: record.jobOccupation || null, resumeOccupation: record.resumeOccupation || null, canReanalyze: Boolean(record.jobText) }); });
 // 旧 URL -> uni-app H5 页面重定向（邮件链接与旧书签不失效）
 app.get('/report/:token', (req, res) => {
   if (isMobileUA(req.headers['user-agent'])) return res.redirect('/#/pages/report/detail?token=' + encodeURIComponent(req.params.token));

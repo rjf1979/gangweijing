@@ -180,7 +180,7 @@
     <ConfirmDialog
       :open="deleteOpen"
       title="删除报告"
-      :message="report ? `将永久删除报告「${report.reportName || '未命名报告'}」。此操作不可撤销。` : ''"
+      :message="report ? `将标记报告「${report.reportName || '未命名报告'}」为已删除。\n用户端将不再展示，数据保留在数据库中（可恢复）。` : ''"
       confirm-text="确认删除"
       :busy="deleting"
       @close="deleteOpen = false"
@@ -259,7 +259,7 @@ async function confirmDelete() {
   deleting.value = true
   try {
     await api.delete(`/reports/${reportId.value}`)
-    toast('报告已删除', 'success')
+    toast('报告已标记删除', 'success')
     router.replace('/reports')
   } catch (err) {
     toast(err.message || '删除失败', 'error')

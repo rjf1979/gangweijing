@@ -110,7 +110,7 @@
     <ConfirmDialog
       :open="deleteTarget !== null"
       title="删除报告"
-      :message="deleteTarget ? `将永久删除报告「${deleteTarget.report_name || deleteTarget.job_title || '未命名报告'}」。\n此操作不可撤销。` : ''"
+      :message="deleteTarget ? `将标记报告「${deleteTarget.report_name || deleteTarget.job_title || '未命名报告'}」为已删除。\n用户端将不再展示，数据保留在数据库中（可恢复）。` : ''"
       confirm-text="确认删除"
       :busy="deleting"
       @close="deleteTarget = null"
@@ -205,7 +205,7 @@ async function confirmDelete() {
   deleting.value = true
   try {
     await api.delete(`/reports/${target.id}`)
-    toast('报告已删除', 'success')
+    toast('报告已标记删除', 'success')
     deleteTarget.value = null
     if (reports.value.length === 1 && page.value > 1) page.value -= 1
     load()

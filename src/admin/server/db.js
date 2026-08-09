@@ -22,6 +22,7 @@ ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_file_path text;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_file_uploaded_at timestamptz;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_masked_fields jsonb;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS facts_confirmed_at timestamptz;
+ALTER TABLE app_reports ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 CREATE TABLE IF NOT EXISTS admin_settings (
   id integer PRIMARY KEY DEFAULT 1,
   site_name text NOT NULL DEFAULT '岗位镜管理后台',
@@ -391,19 +392,19 @@ export function createPgStore() {
       return rows[0].n;
     },
     async countReports() {
-      const { rows } = await pool.query(`SELECT count(*)::int AS n FROM ${reportTable}`);
+      const { rows } = await pool.query(`SELECT count(*)::int AS n FROM ${reportTable} WHERE deleted_at IS NULL`);
       return rows[0].n;
     },
     async countReportsSince(iso) {
-      const { rows } = await pool.query('SELECT count(*)::int AS n FROM ' + reportTable + ' WHERE created_at >= $1', [iso]);
+      const { rows } = await pool.query('SELECT count(*)::int AS n FROM ' + reportTable + ' WHERE created_at >= $1 AND deleted_at IS NULL', [iso]);
       return rows[0].n;
     },
     async reportStatusBreakdown() {
-      const { rows } = await pool.query('SELECT status, count(*)::int AS n FROM ' + reportTable + ' GROUP BY status ORDER BY n DESC');
+      const { rows } = await pool.query('SELECT status, count(*)::int AS n FROM ' + reportTable + ' WHERE deleted_at IS NULL GROUP BY status ORDER BY n DESC');
       return rows;
     },
     async reportEmailStatusBreakdown() {
-      const { rows } = await pool.query('SELECT email_status, count(*)::int AS n FROM ' + reportTable + ' GROUP BY email_status ORDER BY n DESC');
+      const { rows } = await pool.query('SELECT email_status, count(*)::int AS n FROM ' + reportTable + ' WHERE deleted_at IS NULL GROUP BY email_status ORDER BY n DESC');
       return rows;
     },
     async trend(days = 14) {
@@ -413,7 +414,7 @@ export function createPgStore() {
            COALESCE(r.n, 0)::int AS reports
          FROM generate_series(current_date - ($1::int - 1), current_date, interval '1 day') AS d
          LEFT JOIN (SELECT ${cnDate} AS day, count(*) AS n FROM ${userTable} GROUP BY 1) u ON u.day = d::date
-         LEFT JOIN (SELECT ${cnDate} AS day, count(*) AS n FROM ${reportTable} GROUP BY 1) r ON r.day = d::date
+         LEFT JOIN (SELECT ${cnDate} AS day, count(*) AS n FROM ${reportTable} WHERE deleted_at IS NULL GROUP BY 1) r ON r.day = d::date
          ORDER BY d::date`,
         [days]
       );
@@ -431,7 +432,7 @@ export function createPgStore() {
     async recentReports(limit = 6) {
       const { rows } = await pool.query(
         `SELECT id, access_token, company_short_name, job_title, status, email_status, created_at
-         FROM ${reportTable} ORDER BY created_at DESC LIMIT $1`,
+         FROM ${reportTable} WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $1`,
         [limit]
       );
       return rows;
@@ -463,7 +464,7 @@ export function createPgStore() {
     async getUserReports(userId) {
       const { rows } = await pool.query(
         `SELECT id, access_token, company_short_name, job_title, report_name, status, email_status, created_at
-         FROM ${reportTable} WHERE user_id = $1 ORDER BY created_at DESC`,
+         FROM ${reportTable} WHERE user_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`,
         [userId]
       );
       return rows;
@@ -480,7 +481,7 @@ export function createPgStore() {
 
     // ===== 报告管理 =====
     async searchReports({ q, status, emailStatus, limit, offset }) {
-      const clauses = [];
+      const clauses = ['deleted_at IS NULL'];
       const params = [];
       if (q) {
         params.push(`%${q}%`);
@@ -503,7 +504,7 @@ export function createPgStore() {
       return rows;
     },
     async countSearchReports({ q, status, emailStatus }) {
-      const clauses = [];
+      const clauses = ['deleted_at IS NULL'];
       const params = [];
       if (q) {
         params.push(`%${q}%`);
@@ -522,11 +523,11 @@ export function createPgStore() {
       return rows[0].n;
     },
     async getReportById(id) {
-      const { rows } = await pool.query('SELECT * FROM ' + reportTable + ' WHERE id = $1', [id]);
+      const { rows } = await pool.query('SELECT * FROM ' + reportTable + ' WHERE id = $1 AND deleted_at IS NULL', [id]);
       return rows[0] || null;
     },
     async deleteReport(id) {
-      await pool.query('DELETE FROM ' + reportTable + ' WHERE id = $1', [id]);
+      await pool.query('UPDATE ' + reportTable + ' SET deleted_at = now() WHERE id = $1', [id]);
     },
   };
 }
