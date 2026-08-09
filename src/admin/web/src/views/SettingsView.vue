@@ -51,8 +51,8 @@
       <section class="card">
         <div class="card-head">
           <h2 class="card-title">邮件配置（Resend）</h2>
-          <span class="badge" :class="settings?.resend_api_key_masked || environment.emailEnvConfigured ? 'badge-success' : 'badge-neutral'">
-            {{ settings?.resend_api_key_masked || environment.emailEnvConfigured ? '已配置' : '未配置' }}
+          <span class="badge" :class="settings?.resend_api_key_masked ? 'badge-success' : 'badge-neutral'">
+            {{ settings?.resend_api_key_masked ? '已配置' : '未配置' }}
           </span>
         </div>
         <form class="card-body settings-form" novalidate @submit.prevent="saveEmailConfig">
@@ -102,13 +102,7 @@
                 {{ settings?.resend_api_key_masked ? '已配置' : '未配置' }}
               </span>
             </div>
-            <div class="env-row">
-              <span class="env-name">邮件密钥（环境变量兜底）</span>
-              <span class="badge" :class="environment.emailEnvConfigured ? 'badge-success' : 'badge-neutral'">
-                {{ environment.emailEnvConfigured ? '已配置' : '未配置' }}
-              </span>
-            </div>
-            <p class="field-hint env-hint">邮件密钥后台保存优先，环境变量作为兜底；密钥仅以掩码展示，保存后即时生效。</p>
+            <p class="field-hint env-hint">邮件密钥仅以掩码展示，保存后即时生效；邮件发送仅使用此处配置，不再读取环境变量。</p>
           </div>
         </article>
 
@@ -224,7 +218,6 @@ const loading = ref(true)
 const error = ref('')
 const settings = ref(null)
 const admins = ref([])
-const environment = ref({})
 const savingSite = ref(false)
 const savingEmail = ref(false)
 const passwordBusy = ref(false)
@@ -256,7 +249,6 @@ async function load() {
     const data = await api.get('/settings')
     settings.value = data.settings
     admins.value = data.admins
-    environment.value = data.environment
     if (data.settings) {
       form.siteName = data.settings.site_name || ''
       form.announcement = data.settings.announcement || ''
@@ -301,7 +293,6 @@ function applySettings(s) {
 async function reloadSettingsState() {
   const data = await api.get('/settings')
   settings.value = data.settings
-  environment.value = data.environment
   applySettings(data.settings)
 }
 

@@ -409,10 +409,6 @@ app.get('/api/admin/settings', requireAdmin, async (req, res) => {
       updated_at: settings.updated_at,
     } : null,
     admins: admins.map(publicAdmin),
-    environment: {
-      // 环境变量作为兜底配置，后台数据库配置优先
-      emailEnvConfigured: Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM),
-    },
   });
 });
 

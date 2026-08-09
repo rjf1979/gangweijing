@@ -344,8 +344,8 @@ function issueVerification(user) {
 }
 async function sendEmail(message) {
   await refreshAppConfig();
-  const resendKey = appConfig.resendApiKey || process.env.RESEND_API_KEY;
-  const from = appConfig.emailFrom || process.env.EMAIL_FROM;
+  const resendKey = appConfig.resendApiKey;
+  const from = appConfig.emailFrom;
   if (!resendKey || !from) throw new Error('邮件服务尚未配置。');
   const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from, ...message }) });
   const result = await response.json().catch(() => ({}));
@@ -675,7 +675,7 @@ async function generateReport({ user, resumeText, jobText, jobTitle, companyShor
   let emailSent = false;
   try {
     await sendReportEmail(email, reportUrl, report);
-    emailSent = Boolean(email && (appConfig.resendApiKey || process.env.RESEND_API_KEY) && (appConfig.emailFrom || process.env.EMAIL_FROM));
+    emailSent = Boolean(email && appConfig.resendApiKey && appConfig.emailFrom);
     record.emailStatus = emailSent ? 'sent' : 'not_configured';
     if (emailSent) record.emailSentTimes = [new Date().toISOString()]; // 首次自动发送计入当天 5 次限制
   } catch (emailError) {
