@@ -228,5 +228,7 @@
 - 操作：后台公告内容查看
 - 预期：已填写的公告内容不被清空
 
-### 线上验证结果（部署后回填）
-- 待部署
+### 线上验证结果（2026-08-09 已发布上线，commit e67dac5）
+- 已部署：admin db.js 收窄版（自愈仅修 site_name），PM2 gangweijing-admin delete+start，服务 online；主服务无改动未重启
+- 部署核验：线上 /var/www/gangweijing-admin/db.js 自愈 SQL 已收窄（SET site_name 仅修复站点名）；生产库 admin_settings 完好：site_name=岗位镜、公告 86 字符保留、resend_api_key=SET(len36)、email_from=report@zhicha.io、analysis_concurrency=2、updated_at 未被无谓刷新；admin / 200
+- 说明：部署脚本本身从不执行数据库重置 SQL（已核实 deploy_*.sh 仅文件复制+PM2 重启，git 历史无 DROP/TRUNCATE/DELETE admin_settings）；生产库邮件配置此前为空系从未在后台保存过、靠 .env 兜底，上一任务已迁移写入，本次彻底消除启动逻辑误伤用户配置的隐患
