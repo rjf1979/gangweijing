@@ -227,6 +227,12 @@ function buildProtected(text, s) {
       if (extra.length) list.push({ title: '补充信息', content: extra.join('\n') })
     } else {
       const sid = sectionIdOfTitle(sec.title)
+      if (sid === 'extra') {
+        // 附加/补充信息已在 extra_sections 登记过（round-trip）则跳过，避免每次保存重复追加
+        const registered = (s.extra_sections || []).some(x => String(x && x.content || '').trim() === content)
+        if (!registered) list.push({ title: sec.title, content })
+        continue
+      }
       const covered = Boolean(sid && hasStructuredData(sid, s))
       if (!covered) list.push({ title: sec.title, content })
     }
@@ -261,12 +267,17 @@ function collectStructured(s) {
       out[id] = items
     }
   }
-  // 未覆盖内容并入 extra_sections（保留原有，只多不少）
+  // 未覆盖内容并入 extra_sections（同标题同内容去重，避免每轮保存重复累积）
   const extras = Array.isArray(out.extra_sections) ? out.extra_sections.filter(x => x && typeof x === 'object') : []
+  const seen = new Set(extras.map(x => `${x.title || '附加信息'}\u0000${x.content || ''}`))
   for (const p of protectedSections.value) {
     const content = String(p.content || '').trim()
     if (!content) continue
-    extras.push({ title: String(p.title || '附加信息').trim(), content })
+    const title = String(p.title || '附加信息').trim()
+    const key = `${title}\u0000${content}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    extras.push({ title, content })
   }
   out.extra_sections = extras
   return out

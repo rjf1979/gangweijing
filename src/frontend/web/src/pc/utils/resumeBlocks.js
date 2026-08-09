@@ -151,7 +151,7 @@ export const FREE_TITLES = [
   '培训经历', '社团活动', '志愿者经历', '志愿者服务', '公益活动', '社会活动',
   '专利', '发表论文', '论文', '著作', '学术成果', '开源项目', '个人作品',
   '语言能力', '兴趣爱好', '个人特长', '求职意向', '推荐人', '证明人',
-  '附加信息', '其他',
+  '附加信息', '补充信息', '其他',
 ]
 
 // ---------- 职业模板强调区块（与后端 resumeOccupation.js EMPHASIS_SECTIONS 保持一致） ----------
@@ -181,6 +181,7 @@ const TITLE_TO_SECTION = {
   '开源项目': 'open_source', '开源贡献': 'open_source',
   '兴趣爱好': 'interests', '兴趣': 'interests', '爱好': 'interests',
   '推荐人': 'references', '证明人': 'references',
+  '补充信息': 'extra', '附加信息': 'extra', '其他': 'extra',
   '求职意向': 'job_intention', '期望职位': 'job_intention', '意向岗位': 'job_intention', '目标岗位': 'job_intention',
 }
 export function sectionIdOfTitle(title) {
