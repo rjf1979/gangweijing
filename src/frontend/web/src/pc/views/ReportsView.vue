@@ -30,8 +30,11 @@
         <router-link v-for="item in rows" :key="item.id" class="report-row" :to="rowTarget(item)">
           <div><strong>{{ item.reportName }}</strong><small>{{ formatDate(item.createdAt) }}</small></div>
           <span class="status" :class="'status-' + item.status">{{ statusLabel[item.status] || item.status }}</span>
-          <span class="mail" :class="'mail-' + item.emailStatus">邮件：{{ mailLabel[item.emailStatus] || item.emailStatus }}</span>
-          <button v-if="item.canReanalyze" class="neo-button neo-button-secondary report-reanalyze" type="button" :disabled="reanalyzingId === item.id" @click.prevent.stop="reanalyze(item)">{{ reanalyzingId === item.id ? '分析中…' : '重新分析' }}</button>
+          <span class="mail" :class="'mail-' + item.emailStatus">邮件：{{ mailLabel[item.emailStatus] || item.emailStatus }}<template v-if="item.emailSentToday">（今日 {{ item.emailSentToday }}/{{ item.emailMaxToday }}）</template></span>
+          <div class="row-actions">
+            <button v-if="item.canResendEmail" class="neo-button neo-button-secondary report-resend-email" type="button" :disabled="resendingId === item.id || emailLimitReached(item)" :title="emailLimitReached(item) ? '今日发送已达上限' : ''" @click.prevent.stop="resendEmail(item)">{{ resendingId === item.id ? '发送中…' : '重新发送邮件' }}</button>
+            <button v-if="item.canReanalyze" class="neo-button neo-button-secondary report-reanalyze" type="button" :disabled="reanalyzingId === item.id" @click.prevent.stop="reanalyze(item)">{{ reanalyzingId === item.id ? '分析中…' : '重新分析' }}</button>
+          </div>
         </router-link>
       </template>
     </div>
@@ -51,6 +54,7 @@ const loading = ref(true)
 const loadError = ref('')
 const starting = ref(false)
 const reanalyzingId = ref(null)
+const resendingId = ref(null)
 
 const statusLabel = { completed: '已完成', analyzing: '分析中', failed: '失败' }
 const mailLabel = { sent: '已发送', pending: '待发送', failed: '发送失败', not_configured: '未配置', unknown: '未知' }
@@ -97,6 +101,25 @@ async function loadReports() {
   reports.value = data.reports || []
   loadError.value = ''
   return data
+}
+
+// 重新发送邮件：服务端强制两次至少间隔 10 分钟、同一报告当天最多 5 次，达到限制时给出明确提示
+function emailLimitReached(item) {
+  return (item.emailSentToday || 0) >= (item.emailMaxToday || 5)
+}
+
+async function resendEmail(item) {
+  if (resendingId.value) return
+  resendingId.value = item.id
+  try {
+    const data = await api.post('/api/reports/' + item.id + '/resend-email', {})
+    await loadReports()
+    window.alert('邮件已重新发送，请注意查收。' + (data.emailSentToday ? `（今日已发送 ${data.emailSentToday}/${data.emailMaxToday} 次）` : ''))
+  } catch (err) {
+    window.alert(err.message)
+  } finally {
+    resendingId.value = null
+  }
 }
 
 // 重新分析：基于原报告的岗位内容 + 用户最新简历生成新报告，完成后跳转新报告

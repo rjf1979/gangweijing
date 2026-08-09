@@ -614,6 +614,8 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
 .report-list > p { margin: 0; padding: var(--space-5); }
 .report-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: var(--space-5); align-items: center; min-height: 82px; padding: var(--space-4) var(--space-5); color: var(--color-ink); text-decoration: none; }
 .report-row .report-reanalyze { min-height: 44px; padding: 6px 14px; font-size: 14px; white-space: nowrap; }
+.report-row .report-resend-email { min-height: 44px; padding: 6px 14px; font-size: 14px; white-space: nowrap; }
+.report-row div.row-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; }
 .report-row + .report-row { border-top: var(--border-thin); }
 .report-row:hover { background: var(--color-yellow); }
 .report-row div { display: grid; min-width: 0; }
@@ -1094,6 +1096,8 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
   .report-row { grid-template-columns: 1fr auto; gap: var(--space-3); padding: var(--space-4); }
   .report-row .mail { grid-column: 1 / -1; width: fit-content; }
   .report-row .report-reanalyze { grid-column: 1 / -1; width: 100%; }
+  .report-row .report-resend-email { grid-column: 1 / -1; width: 100%; }
+  .report-row div.row-actions { grid-column: 1 / -1; width: 100%; display: grid; grid-template-columns: 1fr; }
   .resume-toolbar { align-items: stretch; flex-direction: column; }
   .resume-actions { display: grid; grid-template-columns: 1fr; }
   .resume-document { padding: 24px 18px; box-shadow: var(--shadow-hard-sm); }

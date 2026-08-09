@@ -232,6 +232,21 @@ const publicAppUrl = () => {
   const configuredUrl = mode === 'server' ? process.env.SERVER_APP_URL : process.env.LOCAL_APP_URL;
   return (configuredUrl || process.env.APP_URL || `http://localhost:${process.env.PORT || 3215}`).replace(/\/$/, '');
 };
+const EMAIL_MIN_INTERVAL_MS = 10 * 60 * 1000; // 两次发送至少间隔 10 分钟
+const EMAIL_MAX_DAILY = 5; // 同一报告一天最多发送 5 次
+// 按 Asia/Shanghai 时区返回 YYYY-MM-DD，用于“一天最多 5 次”的日界判断
+function shanghaiDateKey(iso) {
+  const d = new Date(iso);
+  const y = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', year: 'numeric' }).format(d);
+  const m = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', month: '2-digit' }).format(d);
+  const day = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', day: '2-digit' }).format(d);
+  return `${y}-${m}-${day}`;
+}
+function emailSendStats(record) {
+  const times = Array.isArray(record?.emailSentTimes) ? record.emailSentTimes : [];
+  const todayKey = shanghaiDateKey(new Date());
+  return { todayCount: times.filter(t => shanghaiDateKey(t) === todayKey).length, lastAt: times.length ? times[times.length - 1] : null };
+}
 function issueVerification(user) {
   const token = crypto.randomBytes(32).toString('base64url');
   user.emailVerificationTokenHash = verificationHash(token);
@@ -532,10 +547,12 @@ async function generateReport({ user, resumeText, jobText, jobTitle, companyShor
   const record = { id: crypto.randomUUID(), accessToken, userId: user.id, email, companyShortName: finalCompany, jobTitle: finalJobTitle, jobText, reportName: reportName(createdAt, finalCompany, finalJobTitle), status: 'completed', emailStatus: 'pending', report, usage: usage ? { ...usage, costSource, currency: cost.currency } : null, costUsd, costSource, jobOccupation, resumeOccupation, createdAt, updatedAt: createdAt };
   const reportUrl = `${publicAppUrl()}/report/${accessToken}`;
   let emailSent = false;
+  record.emailSentTimes = [];
   try {
     await sendReportEmail(email, reportUrl, report);
     emailSent = Boolean(email && (appConfig.resendApiKey || process.env.RESEND_API_KEY) && (appConfig.emailFrom || process.env.EMAIL_FROM));
     record.emailStatus = emailSent ? 'sent' : 'not_configured';
+    if (emailSent) record.emailSentTimes = [new Date().toISOString()]; // 首次自动发送计入当天 5 次限制
   } catch (emailError) {
     record.emailStatus = 'failed';
     console.error(emailError.message);
@@ -580,7 +597,43 @@ app.post('/api/reports/:id/reanalyze', async (req, res) => {
   }
 });
 
-app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = publicAppUrl(); const owned = db.reports.filter(item => item.userId === user.id || (!item.userId && item.email === user.email)); const reports = owned.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null, canReanalyze: Boolean(item.jobText) })); const jobKeys = new Set(owned.map(item => `${item.companyShortName || ''}|${item.jobTitle || ''}`).filter(key => key !== '|')); res.json({ reports, stats: { jobs: jobKeys.size, reports: owned.length } }); });
+// 重新发送报告邮件：两次至少间隔 10 分钟，同一报告当天最多 5 次（服务端强制，禁止绕过）
+app.post('/api/reports/:id/resend-email', async (req, res) => {
+  const db = await readDb();
+  const user = currentUser(req, db);
+  if (!user) return res.status(401).json({ error: '请先登录。' });
+  const record = db.reports.find(item => item.id === req.params.id && (item.userId === user.id || (!item.userId && item.email === user.email)));
+  if (!record) return res.status(404).json({ error: '报告不存在或无权访问。' });
+  if (!record.email) return res.status(400).json({ error: '该报告没有可用的接收邮箱。' });
+  const now = Date.now();
+  const todayKey = shanghaiDateKey(new Date(now));
+  const times = Array.isArray(record.emailSentTimes) ? record.emailSentTimes : [];
+  const todayTimes = times.filter(t => shanghaiDateKey(t) === todayKey);
+  const lastTime = times.length ? new Date(times[times.length - 1]).getTime() : 0;
+  if (todayTimes.length >= EMAIL_MAX_DAILY) {
+    return res.status(429).json({ error: `今日邮件已发送 ${EMAIL_MAX_DAILY} 次，已达上限，请明天再试。`, code: 'EMAIL_DAILY_LIMIT' });
+  }
+  if (lastTime && now - lastTime < EMAIL_MIN_INTERVAL_MS) {
+    const waitMin = Math.max(1, Math.ceil((EMAIL_MIN_INTERVAL_MS - (now - lastTime)) / 60000));
+    return res.status(429).json({ error: `邮件发送过于频繁，请至少间隔 10 分钟，约 ${waitMin} 分钟后再试。`, code: 'EMAIL_INTERVAL_LIMIT' });
+  }
+  const reportUrl = `${publicAppUrl()}/report/${record.accessToken}`;
+  try {
+    await sendReportEmail(record.email, reportUrl, record.report || {});
+    record.emailStatus = 'sent';
+    record.emailSentTimes = [...times, new Date(now).toISOString()];
+    record.updatedAt = new Date(now).toISOString();
+    await saveDb(db);
+    res.json({ sent: true, emailStatus: 'sent', emailSentToday: todayTimes.length + 1, emailMaxToday: EMAIL_MAX_DAILY });
+  } catch (error) {
+    record.emailStatus = 'failed';
+    record.updatedAt = new Date(now).toISOString();
+    await saveDb(db);
+    res.status(502).json({ error: `邮件发送失败：${error.message}` });
+  }
+});
+
+app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = publicAppUrl(); const owned = db.reports.filter(item => item.userId === user.id || (!item.userId && item.email === user.email)); const reports = owned.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null, canReanalyze: Boolean(item.jobText), canResendEmail: Boolean(item.email), emailSentToday: emailSendStats(item).todayCount, emailMaxToday: EMAIL_MAX_DAILY })); const jobKeys = new Set(owned.map(item => `${item.companyShortName || ''}|${item.jobTitle || ''}`).filter(key => key !== '|')); res.json({ reports, stats: { jobs: jobKeys.size, reports: owned.length } }); });
 app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, report: record.report, jobOccupation: record.jobOccupation || null, resumeOccupation: record.resumeOccupation || null, canReanalyze: Boolean(record.jobText) }); });
 // 旧 URL -> uni-app H5 页面重定向（邮件链接与旧书签不失效）
 app.get('/report/:token', (req, res) => {
