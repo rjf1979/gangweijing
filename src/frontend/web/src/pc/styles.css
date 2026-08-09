@@ -713,6 +713,60 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
 .rh-lines { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.7; }
 .rh-lines li { margin-bottom: 1.5mm; }
 
+/* 职业模板徽标（识别结果，商务浅色，纯展示不改原文） */
+.rh-occupation-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  margin: 0 0 5mm;
+  padding: 5px 13px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  line-height: 1.4;
+  color: var(--rh-accent);
+  background: color-mix(in srgb, var(--rh-accent) 7%, white);
+  border: 1px solid color-mix(in srgb, var(--rh-accent) 30%, white);
+  border-radius: 999px;
+}
+.rh-occupation-badge::before {
+  content: '◈';
+  font-size: 11px;
+  opacity: .8;
+}
+/* 职业模板强调区块：左侧强调条 + 浅色底，不改原文顺序 */
+.rh-section.rh-emphasis {
+  position: relative;
+  padding: 3mm 0 3mm 4mm;
+  margin-left: -4mm;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--rh-accent) 5%, white), transparent 62%);
+  border-left: 3px solid var(--rh-accent);
+}
+.rh-section.rh-emphasis .rh-h2 { border-bottom-color: color-mix(in srgb, var(--rh-accent) 40%, var(--rh-line)); }
+
+/* 职业模板强调分级：core=核心区块（粗强调条+深色底）/ secondary=次级区块（细强调条+浅色底） */
+.rh-section.rh-emphasis-core {
+  border-left-width: 4px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--rh-accent) 9%, white), transparent 70%);
+}
+.rh-section.rh-emphasis-core .rh-h2 { border-bottom-color: color-mix(in srgb, var(--rh-accent) 55%, var(--rh-line)); }
+.rh-section.rh-emphasis-secondary {
+  border-left-width: 2px;
+  border-left-color: color-mix(in srgb, var(--rh-accent) 55%, white);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--rh-accent) 3%, white), transparent 55%);
+}
+.rh-section.rh-emphasis-secondary .rh-h2 { border-bottom-color: color-mix(in srgb, var(--rh-accent) 25%, var(--rh-line)); }
+
+
+/* 原文描述块（text-first 排版，按原文描述块优化排版） */
+.rh-raw { display: flex; flex-direction: column; gap: 2.5mm; }
+.rh-subhead { margin-top: 1mm; font-size: 13.5px; font-weight: 800; color: var(--rh-accent); line-height: 1.6; }
+.rh-raw-time { font-size: 11.5px; font-weight: 600; color: var(--rh-muted); font-variant-numeric: tabular-nums; line-height: 1.6; padding-top: 1px; }
+.rh-raw-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.7; }
+.rh-raw-list li { margin-bottom: 1mm; }
+
+
 .rh-skills { display: flex; flex-direction: column; gap: 2mm; }
 .rh-skill-group { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 10px; font-size: 13px; line-height: 1.7; }
 .rh-skill-label { flex: 0 0 auto; min-width: 70px; font-weight: 800; color: var(--rh-muted); }
@@ -777,6 +831,7 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
   .rh-name { font-size: 20pt; }
   .rh-h2 { font-size: 12pt; }
   .rh-text, .rh-lines, .rh-entry-list, .rh-entry-desc { font-size: 10.5pt; }
+  .rh-subhead { font-size: 11pt; }
   .rh-entry { grid-template-columns: 24mm 1fr; }
   .resume-html .mask-tag, .resume-html .mask-input { display: none !important; }
 }
@@ -1058,3 +1113,8 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
   .resume-document pre.resume-text, .mask-tag, .mask-input { display: none !important; }
   .print-output { display: block !important; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 }
+
+/* 岗位-简历职业一致性提示条（报告页，商务浅色） */
+.occupation-banner { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.occupation-banner-head { flex: 0 0 auto; font-size: 14px; }
+.occupation-banner-text { flex: 1 1 auto; min-width: 0; }

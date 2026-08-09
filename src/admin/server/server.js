@@ -1,4 +1,4 @@
-﻿import crypto from 'node:crypto';
+﻿﻿import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
@@ -305,6 +305,7 @@ app.get('/api/admin/users/:id', requireAdmin, async (req, res) => {
       createdAt: iso(user.created_at), resumeText: user.resume_text || '',
       resumeUpdatedAt: iso(user.resume_updated_at),
       resumeFile: publicResumeFile(user),
+      resumeStructured: user.resume_structured || null,
       verificationEmailStatus: user.verification_email_status || 'none',
     },
     reports: reports.map(r => ({
@@ -690,6 +691,9 @@ app.use('/api', (req, res) => res.status(404).json({ error: '接口不存在。'
 
 // ===== 静态托管前端 =====
 app.use(express.static(webDist, { index: false, maxAge: '1h' }));
+// 兼容本地直连 /admin/ 前缀（生产 nginx 已剥离前缀，此规则对 /assets/* 无影响）：
+// dist 内 index.html 的 base=/admin/，资源路径为 /admin/assets/*，需按前缀二次挂载 static
+app.use('/admin', express.static(webDist, { index: false, maxAge: '1h' }));
 app.use((req, res, next) => {
   if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
   const indexFile = path.join(webDist, 'index.html');

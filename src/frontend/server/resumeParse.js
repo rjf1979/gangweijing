@@ -3,6 +3,7 @@
 import fs from 'node:fs/promises';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import mammoth from 'mammoth';
+import { detectOccupation } from './resumeOccupation.js';
 
 // ---------- 章节标题关键词 ----------
 const SECTION_RULES = [
@@ -15,6 +16,17 @@ const SECTION_RULES = [
   { id: 'certificates', re: /^(证书|资格证书|证书资质|资质证书|职称|职业资格|专业证书)$/ },
   { id: 'awards', re: /^(获奖|荣誉|获奖荣誉|奖项|所获荣誉|荣誉证书|获奖情况)$/ },
   { id: 'basic', re: /^(基本信息|个人信息|个人资料|联系方式|基本资料|个人情况)$/ },
+  { id: 'job_intention', re: /^(求职意向|期望职位|意向岗位|目标岗位|职业意向)$/ },
+  { id: 'training', re: /^(培训经历|培训|进修)$/ },
+  { id: 'languages', re: /^(语言能力|语言|外语能力)$/ },
+  { id: 'volunteer', re: /^(志愿者经历|志愿者服务|公益活动|社会活动)$/ },
+  { id: 'social', re: /^(社团活动|学生工作|校园经历)$/ },
+  { id: 'publications', re: /^(发表论文|论文|著作|学术成果|出版著作)$/ },
+  { id: 'patents', re: /^(专利|专利成果)$/ },
+  { id: 'portfolio', re: /^(个人作品|作品集|代表作品)$/ },
+  { id: 'open_source', re: /^(开源项目|开源贡献)$/ },
+  { id: 'interests', re: /^(兴趣爱好|兴趣|爱好)$/ },
+  { id: 'references', re: /^(推荐人|证明人)$/ },
 ];
 function matchSection(text) {
   const t = String(text || '').replace(/[：:\s]/g, '').trim();
@@ -168,6 +180,42 @@ function htmlToLines(html) {
   return lines;
 }
 
+// ---------- 自由区块 → 结构化字段映射（本地解析无字段级抽取，按行原样存储） ----------
+const FREE_SECTION_KEY = {
+  '培训经历': 'training', '培训': 'training', '进修': 'training',
+  '语言能力': 'languages', '语言': 'languages', '外语能力': 'languages',
+  '志愿者经历': 'volunteer', '志愿者服务': 'volunteer', '公益活动': 'volunteer', '社会活动': 'volunteer',
+  '社团活动': 'social', '学生工作': 'social', '校园经历': 'social',
+  '发表论文': 'publications', '论文': 'publications', '著作': 'publications', '学术成果': 'publications',
+  '专利': 'patents', '专利成果': 'patents',
+  '个人作品': 'portfolio', '作品集': 'portfolio', '代表作品': 'portfolio',
+  '开源项目': 'open_source', '开源贡献': 'open_source',
+  '兴趣爱好': 'interests', '兴趣': 'interests', '爱好': 'interests',
+  '推荐人': 'references', '证明人': 'references',
+};
+function pushFreeSection(structured, target, title, content) {
+  const lines = content.split('\n').map(x => x.trim()).filter(Boolean);
+  if (!lines.length) return;
+  if (target === 'languages' || target === 'interests') {
+    structured[target] = [...(structured[target] || []), ...lines];
+    return;
+  }
+  if (target === 'training' || target === 'volunteer' || target === 'social' || target === 'publications' || target === 'patents' || target === 'portfolio' || target === 'open_source' || target === 'references') {
+    // 本地解析无字段级抽取：每条按 { name: 首行, description: 其余行 } 存，AI 路径会输出完整字段
+    const items = [];
+    let head = '';
+    let rest = [];
+    for (const ln of lines) {
+      const isNewHead = head && (ln.length <= 40) && !/[，。；：:]$/.test(ln) && rest.length >= 2;
+      if (!head) { head = ln; continue; }
+      if (isNewHead) { items.push({ name: head, description: rest.join('\n') }); head = ln; rest = []; continue; }
+      rest.push(ln);
+    }
+    if (head) items.push({ name: head, description: rest.join('\n') });
+    structured[target] = [...(structured[target] || []), ...items.filter(x => x.name)];
+  }
+}
+
 // ---------- 统一：lines → structured ----------
 const TECH_WORDS = ['.NET', 'C#', 'Java', 'Python', 'JavaScript', 'TypeScript', 'Go', 'Rust', 'PHP', 'Ruby', 'Swift', 'Kotlin', 'Objective-C', 'C++', 'Vue', 'React', 'Angular', 'Node.js', 'Express', 'Django', 'Flask', 'Spring Boot', 'Spring', 'MyBatis', 'Hibernate', 'Redis', 'Memcached', 'MySQL', 'PostgreSQL', 'Oracle', 'SQL Server', 'SqlServer', 'MongoDB', 'Elasticsearch', 'Kafka', 'RabbitMQ', 'RocketMQ', 'ActiveMQ', 'Docker', 'Kubernetes', 'K8s', 'Nginx', 'Linux', 'Hadoop', 'Spark', 'Flink', 'Hive', 'ZooKeeper', 'Dubbo', 'gRPC', 'WebSocket', 'Layui', 'Jquery', 'jQuery', 'axios', 'HTML5', 'HTML', 'CSS3', 'CSS', 'Sass', 'Less', 'Webpack', 'Vite', 'Git', 'SVN', 'Maven', 'Gradle', 'Jenkins', '微服务', '分布式', '高并发', '缓存', '消息队列', '大数据', '云计算', '人工智能', '机器学习', '深度学习', '物联网', '区块链', 'WCF', 'ORM', 'MVC', 'API', 'RESTful', 'GraphQL', '微信小程序', 'Flutter', 'React Native', 'Element UI', 'Ant Design', 'Bootstrap', 'uniapp'];
 
@@ -197,14 +245,25 @@ export function structureFromLines(lines) {
   // 2. 组装 structured
   const basic = parseBasic(headLines);
   const structured = {
-    schema_version: 1,
+    schema_version: 2,
     basic,
+    job_intention: {},
     education: [],
     work_experience: [],
     project_experience: [],
     skills: { technical: [], tools: [], soft: [], languages: [] },
     certificates: [],
     awards: [],
+    training: [],
+    languages: [],
+    volunteer: [],
+    social: [],
+    publications: [],
+    patents: [],
+    portfolio: [],
+    open_source: [],
+    interests: [],
+    references: [],
     self_evaluation: '',
     summary: '',
     extra_sections: [],
@@ -227,9 +286,30 @@ export function structureFromLines(lines) {
         for (const k of Object.keys(b)) if (!structured.basic[k]) structured.basic[k] = b[k];
         break;
       }
+      case 'job_intention': {
+        const text = joinBody(sec.body);
+        if (text) {
+          const linesArr = text.split('\n').map(x => x.trim()).filter(Boolean);
+          const ji = {};
+          const first = linesArr[0] || '';
+          if (first) ji.target_position = first.replace(/^目标岗位|^期望职位|^意向岗位|^求职意向|^[：:]\s*/, '').trim();
+          const city = text.match(/期望城市[：:]?\s*([\u4e00-\u9fa5]{2,8}?(?:市|省|区|县))/);
+          if (city) ji.expected_city = city[1];
+          const salary = text.match(/期望薪资[：:]?\s*([^\n]{2,20})/);
+          if (salary) ji.expected_salary = salary[1].trim();
+          const jobType = text.match(/(全职|兼职|实习|校园招聘|校招)/);
+          if (jobType) ji.job_type = jobType[1];
+          structured.job_intention = ji;
+        }
+        break;
+      }
       default: {
         const content = joinBody(sec.body);
-        if (content) structured.extra_sections.push({ title: sec.title, content });
+        if (content) {
+          const target = FREE_SECTION_KEY[sec.title];
+          if (target) pushFreeSection(structured, target, sec.title, content);
+          else structured.extra_sections.push({ title: sec.title, content });
+        }
       }
     }
   }
@@ -237,6 +317,8 @@ export function structureFromLines(lines) {
   structured.work_experience = structured.work_experience.filter(x => x.company || x.title);
   structured.project_experience = structured.project_experience.filter(x => x.name || x.role);
   structured.education = structured.education.filter(x => x.school || x.degree || x.major);
+  // 4. 职业识别：写入 structured.occupation 元数据（供渲染强调与后台对号入座）
+  structured.occupation = detectOccupation(fullText, structured);
   return { structured, fullText };
 }
 

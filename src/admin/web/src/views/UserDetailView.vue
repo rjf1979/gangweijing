@@ -92,6 +92,41 @@
 
       <section class="card">
         <div class="card-head">
+          <h2 class="card-title">简历结构匹配</h2>
+          <span v-if="occupationInfo" class="badge badge-info">职业模板 · {{ occupationInfo.name }}</span>
+          <span v-else class="badge badge-neutral">未识别</span>
+        </div>
+        <div class="card-body">
+          <template v-if="occupationInfo">
+            <div class="occ-summary">
+              <div class="occ-conf">
+                <span class="occ-conf-label">匹配置信度</span>
+                <span class="occ-conf-value">{{ pct(occupationInfo.confidence) }}</span>
+              </div>
+              <div v-if="occupationInfo.matchedKeywords.length" class="occ-keywords">
+                <span class="occ-kw-label">命中关键词</span>
+                <span v-for="k in occupationInfo.matchedKeywords" :key="k.k" class="badge badge-neutral occ-kw">
+                  {{ k.k }}<em v-if="k.count > 1">×{{ k.count }}</em>
+                </span>
+              </div>
+            </div>
+            <div v-if="structured" class="occ-sections">
+              <div class="occ-sections-head">结构化区块对号入座</div>
+              <ul class="occ-section-list">
+                <li v-for="s in sectionStats" :key="s.key" :class="{ filled: s.filled }">
+                  <span class="occ-section-dot" aria-hidden="true"></span>
+                  <span class="occ-section-label">{{ s.label }}</span>
+                  <span class="occ-section-state">{{ s.filled ? '已填充' : '空' }}</span>
+                </li>
+              </ul>
+            </div>
+          </template>
+          <p v-else class="cell-muted occ-none">该简历未识别职业模板（旧数据或无足够信号）。</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
           <h2 class="card-title">分析报告</h2>
           <span class="cell-muted">共 {{ reports.length }} 份</span>
         </div>
@@ -181,6 +216,51 @@ const deleteReportTarget = ref(null)
 const deleteResumeFileOpen = ref(false)
 const fileBusy = ref(false)
 const busy = ref(false)
+
+const structured = computed(() => user.value?.resumeStructured || null)
+const occupationInfo = computed(() => {
+  const occ = structured.value?.occupation
+  if (!occ || !occ.id) return null
+  return {
+    id: String(occ.id),
+    name: occ.name || String(occ.id),
+    confidence: typeof occ.confidence === 'number' ? occ.confidence : 0,
+    matchedKeywords: Array.isArray(occ.matchedKeywords) ? occ.matchedKeywords.filter(k => k && typeof k === 'object' && k.k) : [],
+  }
+})
+function pct(v) {
+  return Math.round((Number(v) || 0) * 100) + '%'
+}
+const SECTION_LABELS = [
+  { key: 'job_intention', label: '求职意向' },
+  { key: 'summary', label: '个人摘要' },
+  { key: 'education', label: '教育经历' },
+  { key: 'work_experience', label: '工作经历' },
+  { key: 'project_experience', label: '项目经历' },
+  { key: 'skills', label: '技能特长' },
+  { key: 'certificates', label: '证书资质' },
+  { key: 'awards', label: '获奖荣誉' },
+  { key: 'self_evaluation', label: '自我评价' },
+  { key: 'training', label: '培训经历' },
+  { key: 'languages', label: '语言能力' },
+  { key: 'volunteer', label: '志愿者经历' },
+  { key: 'social', label: '社团活动' },
+  { key: 'publications', label: '发表论文' },
+  { key: 'patents', label: '专利' },
+  { key: 'portfolio', label: '个人作品' },
+  { key: 'open_source', label: '开源项目' },
+  { key: 'interests', label: '兴趣爱好' },
+  { key: 'references', label: '推荐人' },
+]
+const sectionStats = computed(() => {
+  const s = structured.value || {}
+  const count = v => Array.isArray(v) ? v.length : (typeof v === 'string' && String(v).trim() ? 1 : 0)
+  const skillCount = sk => sk && typeof sk === 'object' ? ['technical', 'tools', 'soft', 'languages'].reduce((n, k) => n + (Array.isArray(sk[k]) ? sk[k].length : 0), 0) : 0
+  return SECTION_LABELS.map(({ key, label }) => ({
+    key, label,
+    filled: key === 'skills' ? skillCount(s.skills) > 0 : count(s[key]) > 0,
+  }))
+})
 
 const charAt0 = computed(() => String(user.value?.email || '?').charAt(0))
 const emailStatusLabel = computed(() => {
@@ -367,6 +447,37 @@ onMounted(load)
 @media (max-width: 980px) {
   .profile-grid { grid-template-columns: repeat(2, 1fr); }
 }
+.occ-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 20px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+}
+.occ-conf { display: inline-flex; align-items: baseline; gap: 8px; }
+.occ-conf-label { font-size: 12px; color: var(--color-text-muted); }
+.occ-conf-value { font-size: 20px; font-weight: 800; color: var(--color-primary); font-variant-numeric: tabular-nums; }
+.occ-keywords { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.occ-kw-label { font-size: 12px; color: var(--color-text-muted); }
+.occ-kw em { font-style: normal; opacity: .7; margin-left: 2px; }
+.occ-sections { border-top: 1px solid var(--color-border); padding-top: 12px; }
+.occ-sections-head { font-size: 12px; font-weight: 700; color: var(--color-text-muted); margin-bottom: 8px; }
+.occ-section-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 18px; margin: 0; padding: 0; list-style: none; }
+.occ-section-list li { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-text-secondary); }
+.occ-section-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-border); flex-shrink: 0; }
+.occ-section-list li.filled .occ-section-dot { background: var(--color-success); }
+.occ-section-list li.filled .occ-section-label { color: var(--color-text); font-weight: 600; }
+.occ-section-state { margin-left: auto; font-size: 11px; color: var(--color-text-muted); }
+.occ-section-list li.filled .occ-section-state { color: var(--color-success); }
+.occ-none { margin: 0; }
+@media (max-width: 760px) {
+  .occ-section-list { grid-template-columns: repeat(2, 1fr); }
+}
+
 .resume-empty {
   margin: 0;
 }

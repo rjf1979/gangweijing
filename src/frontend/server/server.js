@@ -8,6 +8,7 @@ import { PDFParse } from 'pdf-parse';
 import { pdf as pdfToImages } from 'pdf-to-img';
 import { createPgStore } from './db.js';
 import { analyzePdf, analyzeDocx } from './resumeParse.js';
+import { detectOccupation, withOccupation } from './resumeOccupation.js';
 
 const app = express();
 const root = path.resolve('.');
@@ -142,9 +143,11 @@ const RESUME_STRUCTURE_PROMPT = `你是资深中文简历解析专家。将下�
 3. 工作经历按时间倒序排列；responsibilities 与 achievements 各用数组，每项一句话并保留量化数据。
 4. skills.technical 是技术栈/框架/编程语言，tools 是工具软件，soft 是软技能，languages 是语言能力。
 5. years_of_experience、birth_year 用数字，无法确定时输出 null。
-6. 输出严格 JSON，不要输出任何多余文字或代码块标记。
+6. 求职意向独立成块：target_position 目标岗位、expected_city 期望城市、expected_salary 期望薪资、job_type 工作性质（全职/兼职/实习）、available_date 到岗时间；无法确定留空。
+7. 自由区块对号入座：培训经历→training、语言能力→languages、志愿/公益→volunteer、社团/校园→social、论文/著作/学术成果→publications、专利→patents、个人作品/作品集→portfolio、开源项目→open_source、兴趣爱好→interests、推荐人/证明人→references；references 需本人同意才写，一般写「可提供」。
+8. 输出严格 JSON，不要输出任何多余文字或代码块标记。
 
-JSON 结构：{schema_version:1,basic:{name,gender,birth_year,phone,email,location,current_company,current_title,years_of_experience,expected_salary,job_intention,available_date},education:[{school,degree,major,start_date,end_date,gpa,honors:[]}],work_experience:[{company,title,start_date,end_date,industry,responsibilities:[],achievements:[],skills_used:[]}],project_experience:[{name,role,start_date,end_date,description,achievements:[],tech_stack:[]}],skills:{technical:[],tools:[],soft:[],languages:[]},certificates:[],awards:[],self_evaluation,summary,warnings:[]}
+JSON 结构：{schema_version:2,basic:{name,gender,birth_year,phone,email,location,current_company,current_title,years_of_experience,expected_salary,job_intention,available_date},job_intention:{target_position,expected_city,expected_salary,job_type,available_date},education:[{school,degree,major,start_date,end_date,gpa,honors:[]}],work_experience:[{company,title,start_date,end_date,industry,responsibilities:[],achievements:[],skills_used:[]}],project_experience:[{name,role,start_date,end_date,description,achievements:[],tech_stack:[]}],skills:{technical:[],tools:[],soft:[],languages:[]},certificates:[],awards:[],training:[{name,institution,date,description}],languages:[{language,fluency}],volunteer:[{organization,role,date,description}],social:[{organization,role,date,description}],publications:[{title,journal,date,authors}],patents:[{name,patent_no,date,status}],portfolio:[{name,url,description}],open_source:[{name,url,description}],interests:[],references:[{name,company,title,contact}],self_evaluation,summary,warnings:[]}
 
 简历文本：
 `;
@@ -166,9 +169,11 @@ async function structureResume(text) {
   const model = active?.modelId || process.env.OPENAI_MODEL;
   const parsed = parseJsonText(extractText(payload));
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || (!parsed.basic && !parsed.education && !parsed.work_experience && !parsed.skills)) throw new Error('AI 返回的简历结构化数据不完整，请稍后重试。');
+  // 职业识别：写入 structured.occupation 元数据（供渲染强调与后台对号入座）
+  const structured = withOccupation(parsed, String(text || ''));
   const usage = extractUsage(payload, model);
   const cost = await computeReportCost(usage);
-  return { structured: parsed, usage: usage ? { ...usage, costSource: cost.source, currency: cost.currency } : null, cost, model };
+  return { structured, usage: usage ? { ...usage, costSource: cost.source, currency: cost.currency } : null, cost, model };
 }
 // 简历隐私脱敏：保存/入库/发送 AI 前对手机号、邮箱、证件号、银行卡、微信/QQ、门牌号等敏感信息打码，尊重用户隐私
 function maskResumePII(text) {
@@ -283,7 +288,7 @@ app.post('/api/login', async (req, res) => { const { email, password } = req.bod
 app.get('/api/session', async (req, res) => { const db = await readDb(); const session = currentSession(req, db); const user = session && db.users.find(x => x.id === session.userId); res.json({ authenticated: Boolean(user), user: user ? { id: user.id, email: user.email, emailVerified: Boolean(user.emailVerifiedAt) } : null }); });
 app.post('/api/verification-email', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); if (user.emailVerifiedAt) return res.json({ verified: true }); const elapsed = Date.now() - new Date(user.verificationSentAt || 0).getTime(); if (elapsed < 60000) return res.status(429).json({ error: `请在 ${Math.ceil((60000 - elapsed) / 1000)} 秒后重试。` }); const token = issueVerification(user); await saveDb(db); try { user.verificationMessageId = await sendVerificationEmail(user.email, token); user.verificationEmailStatus = 'sent'; delete user.verificationEmailError; await saveDb(db); res.json({ sent: true }); } catch (error) { user.verificationEmailStatus = 'failed'; user.verificationEmailError = error.message; await saveDb(db); res.status(502).json({ error: `验证邮件发送失败：${error.message}` }); } });
 app.post('/api/verify-email', async (req, res) => { const token = String(req.body?.token || ''); if (!token) return res.status(400).json({ error: '验证链接无效。' }); const db = await readDb(); const tokenHash = verificationHash(token); const user = db.users.find(item => item.emailVerificationTokenHash === tokenHash); if (!user || !user.emailVerificationExpiresAt || new Date(user.emailVerificationExpiresAt) <= new Date()) return res.status(400).json({ error: '验证链接无效或已过期，请重新发送。' }); user.emailVerifiedAt = new Date().toISOString(); delete user.emailVerificationTokenHash; delete user.emailVerificationExpiresAt; delete user.verificationEmailError; user.verificationEmailStatus = 'verified'; await saveDb(db); res.json({ verified: true, email: user.email }); });
-app.get('/api/resume', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); res.json({ hasResume: Boolean(user.resumeText), factsConfirmed: Boolean(user.factsConfirmedAt), text: maskResumePII(user.resumeText || ''), masked: true, maskedFields: user.resumeMaskedFields && user.resumeMaskedFields.length ? user.resumeMaskedFields : detectMaskedFields(maskResumePII(user.resumeText || '')), updatedAt: user.resumeUpdatedAt || user.createdAt, structured: user.resumeStructured || null, structuredAt: user.resumeStructuredAt || null, resumeFile: user.resumeFilePath ? { name: user.resumeFileName || '简历文件', mime: user.resumeFileMime || 'application/octet-stream', size: user.resumeFileSize || 0, uploadedAt: user.resumeFileUploadedAt || null } : null }); });
+app.get('/api/resume', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); res.json({ hasResume: Boolean(user.resumeText), factsConfirmed: Boolean(user.factsConfirmedAt), text: maskResumePII(user.resumeText || ''), masked: true, maskedFields: user.resumeMaskedFields && user.resumeMaskedFields.length ? user.resumeMaskedFields : detectMaskedFields(maskResumePII(user.resumeText || '')), updatedAt: user.resumeUpdatedAt || user.createdAt, structured: (() => { let st = user.resumeStructured || null; if (st && !st.occupation) st = withOccupation(st, maskResumePII(user.resumeText || '')); return st; })(), structuredAt: user.resumeStructuredAt || null, resumeFile: user.resumeFilePath ? { name: user.resumeFileName || '简历文件', mime: user.resumeFileMime || 'application/octet-stream', size: user.resumeFileSize || 0, uploadedAt: user.resumeFileUploadedAt || null } : null }); });
 const FILE_REF_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isSafeFileRef = value => typeof value === 'string' && FILE_REF_RE.test(value);
 async function readStagingMeta(fileRef) {
@@ -347,7 +352,9 @@ app.put('/api/resume', async (req, res) => {
         result = await structureResume(maskedText);
       }
       // 结构化字段兜底脱敏（OCR 直接读到真实信息 → 全字段递归打码；文本模型输入已脱敏，幂等无副作用）
-      user.resumeStructured = maskStructuredPII(result.structured);
+      // 职业识别：随保存写入 occupation 元数据（AI/本地/OCR 结果统一补齐，旧数据读取时再兜底）
+      const withOcc = withOccupation(result.structured, maskedText);
+      user.resumeStructured = maskStructuredPII(withOcc);
       user.resumeStructuredUsage = result.usage || null;
       user.resumeStructuredAt = new Date().toISOString();
     } catch (error) {
@@ -359,10 +366,10 @@ app.put('/api/resume', async (req, res) => {
   res.json({ saved: true, masked: true, maskedFields: user.resumeMaskedFields || [], hasResumeFile: Boolean(user.resumeFilePath), structured: Boolean(user.resumeStructured), structuredError });
 });
 // ---------- 简历 OCR 识别（多模态模型直接读取页面图片，识别版式结构） ----------
-const RESUME_STRUCTURE_SCHEMA = `{schema_version:1,basic:{name,gender,birth_year,phone,email,location,current_company,current_title,years_of_experience,expected_salary,job_intention,available_date},education:[{school,degree,major,start_date,end_date,gpa,honors:[]}],work_experience:[{company,title,start_date,end_date,industry,responsibilities:[],achievements:[],skills_used:[]}],project_experience:[{name,role,start_date,end_date,description,achievements:[],tech_stack:[]}],skills:{technical:[],tools:[],soft:[],languages:[]},certificates:[],awards:[],self_evaluation,summary,warnings:[]}`;
+const RESUME_STRUCTURE_SCHEMA = `{schema_version:2,basic:{name,gender,birth_year,phone,email,location,current_company,current_title,years_of_experience,expected_salary,job_intention,available_date},job_intention:{target_position,expected_city,expected_salary,job_type,available_date},education:[{school,degree,major,start_date,end_date,gpa,honors:[]}],work_experience:[{company,title,start_date,end_date,industry,responsibilities:[],achievements:[],skills_used:[]}],project_experience:[{name,role,start_date,end_date,description,achievements:[],tech_stack:[]}],skills:{technical:[],tools:[],soft:[],languages:[]},certificates:[],awards:[],training:[{name,institution,date,description}],languages:[{language,fluency}],volunteer:[{organization,role,date,description}],social:[{organization,role,date,description}],publications:[{title,journal,date,authors}],patents:[{name,patent_no,date,status}],portfolio:[{name,url,description}],open_source:[{name,url,description}],interests:[],references:[{name,company,title,contact}],self_evaluation,summary,warnings:[]}`;
 const RESUME_OCR_PROMPT = `你是资深中文简历解析专家，正在 OCR 识别候选人上传的简历页面图片（多页按阅读顺序排列）。
 输出严格 JSON（不要输出任何多余文字或代码块标记）：{"text":"完整保留简历文本与版式结构，段落/条目前保留原始标题行（如「个人摘要」「工作经历」「技能特长」），保持阅读顺序，不遗漏真实信息","structured":${RESUME_STRUCTURE_SCHEMA},"warnings":[]}
-结构化要求：只提取简历中真实存在的信息，绝不编造或推测；无法确定的内容留空字符串或空数组，不要输出 null；日期统一为 "YYYY-MM" 或 "YYYY" 或 ""；工作经历按时间倒序；responsibilities 与 achievements 各用数组，每项一句话并保留量化数据；skills.technical 是技术栈/框架/编程语言，tools 是工具软件，soft 是软技能，languages 是语言能力；years_of_experience、birth_year 用数字，无法确定时输出 null。自评类标题（个人优势、个人亮点、核心优势、个人特长、职业优势、竞争优势等）下的内容必须放入 structured.self_evaluation，严禁混入 work_experience 条目；归属判断以标题与版式位置为据，不依赖正文先后顺序。`;
+结构化要求：只提取简历中真实存在的信息，绝不编造或推测；无法确定的内容留空字符串或空数组，不要输出 null；日期统一为 "YYYY-MM" 或 "YYYY" 或 ""；工作经历按时间倒序；responsibilities 与 achievements 各用数组，每项一句话并保留量化数据；skills.technical 是技术栈/框架/编程语言，tools 是工具软件，soft 是软技能，languages 是语言能力；years_of_experience、birth_year 用数字，无法确定时输出 null。自评类标题（个人优势、个人亮点、核心优势、个人特长、职业优势、竞争优势等）下的内容必须放入 structured.self_evaluation，严禁混入 work_experience 条目；归属判断以标题与版式位置为据，不依赖正文先后顺序。自由区块对号入座：培训经历→training、语言能力→languages、志愿/公益→volunteer、社团/校园→social、论文/著作/学术成果→publications、专利→patents、个人作品/作品集→portfolio、开源项目→open_source、兴趣爱好→interests、推荐人/证明人→references。`;
 const MAX_OCR_PAGES = 6;
 // 把 PDF 渲染成页面 PNG（最多 MAX_OCR_PAGES 页）；图片直接使用；DOCX 不支持返回 null
 async function renderResumePageBuffers(filePath, mimetype) {
@@ -402,8 +409,11 @@ async function ocrResume(filePath, mimetype) {
   const model = activeOcr?.modelId || process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL;
   const parsed = parseJsonText(extractText(payload));
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('OCR 返回数据无法解析，请稍后重试。');
-  const structured = parsed.structured && typeof parsed.structured === 'object' && !Array.isArray(parsed.structured) ? parsed.structured : null;
+  let structured = parsed.structured && typeof parsed.structured === 'object' && !Array.isArray(parsed.structured) ? parsed.structured : null;
   const text = String(parsed.text || '').trim();
+  // 职业识别：写入 structured.occupation 元数据
+  if (structured) structured = withOccupation(structured, text);
+  else if (text) structured = { schema_version: 2, occupation: detectOccupation(text, {}) };
   if (!text && !structured) throw new Error('OCR 未能识别出简历内容，请稍后重试。');
   const usage = extractUsage(payload, model);
   const cost = await computeReportCost(usage);
@@ -514,14 +524,17 @@ app.post('/api/analyze', async (req, res) => {
     const cost = await computeReportCost(usage);
     const costUsd = cost.value;
     const costSource = cost.source;
-    const createdAt = new Date().toISOString(); const finalCompany = companyShortName || report.company_short_name || ''; const finalJobTitle = jobTitle || report.job_title || ''; const accessToken = crypto.randomBytes(24).toString('base64url'); const record = { id: crypto.randomUUID(), accessToken, userId: user.id, email, companyShortName: finalCompany, jobTitle: finalJobTitle, reportName: reportName(createdAt, finalCompany, finalJobTitle), status: 'completed', emailStatus: 'pending', report, usage: usage ? { ...usage, costSource, currency: cost.currency } : null, costUsd, costSource, createdAt, updatedAt: createdAt }; db.reports.push(record); await saveDb(db);
+    const createdAt = new Date().toISOString(); const finalCompany = companyShortName || report.company_short_name || ''; const finalJobTitle = jobTitle || report.job_title || ''; const accessToken = crypto.randomBytes(24).toString('base64url'); // 岗位-简历职业联动：识别岗位职业模板 + 简历职业快照，供报告页一致性提示
+  const jobOccupation = detectOccupation(String(jobText || ''));
+  const resumeOccupation = withOccupation(user.resumeStructured || {}, maskedResume).occupation || null;
+  const record = { id: crypto.randomUUID(), accessToken, userId: user.id, email, companyShortName: finalCompany, jobTitle: finalJobTitle, reportName: reportName(createdAt, finalCompany, finalJobTitle), status: 'completed', emailStatus: 'pending', report, usage: usage ? { ...usage, costSource, currency: cost.currency } : null, costUsd, costSource, jobOccupation, resumeOccupation, createdAt, updatedAt: createdAt }; db.reports.push(record); await saveDb(db);
     const reportUrl = `${publicAppUrl()}/report/${accessToken}`;
     let emailSent = false; try { await sendReportEmail(email, reportUrl, report); emailSent = Boolean(email && (appConfig.resendApiKey || process.env.RESEND_API_KEY) && (appConfig.emailFrom || process.env.EMAIL_FROM)); record.emailStatus = emailSent ? 'sent' : 'not_configured'; } catch (emailError) { record.emailStatus = 'failed'; console.error(emailError.message); } record.updatedAt = new Date().toISOString(); await saveDb(db);
     res.json({ id: record.id, reportName: record.reportName, reportUrl, emailSent, report });
   } catch (error) { res.status(502).json({ error: `AI 分析失败：${error.message}` }); }
 });
 app.get('/api/reports', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const appUrl = publicAppUrl(); const owned = db.reports.filter(item => item.userId === user.id || (!item.userId && item.email === user.email)); const reports = owned.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => ({ id: item.id, reportName: item.reportName || reportName(item.createdAt, item.companyShortName, item.jobTitle), jobTitle: item.jobTitle || '未命名岗位', status: item.status || 'completed', emailStatus: item.emailStatus || 'unknown', createdAt: item.createdAt, reportUrl: item.accessToken ? `${appUrl}/report/${item.accessToken}` : null })); const jobKeys = new Set(owned.map(item => `${item.companyShortName || ''}|${item.jobTitle || ''}`).filter(key => key !== '|')); res.json({ reports, stats: { jobs: jobKeys.size, reports: owned.length } }); });
-app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, report: record.report }); });
+app.get('/api/reports/:token', async (req, res) => { const db = await readDb(); const record = db.reports.find(item => item.accessToken === req.params.token); if (!record) return res.status(404).json({ error: '报告不存在或链接无效。' }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ reportName: record.reportName || reportName(record.createdAt, record.companyShortName, record.jobTitle), jobTitle: record.jobTitle, createdAt: record.createdAt, report: record.report, jobOccupation: record.jobOccupation || null, resumeOccupation: record.resumeOccupation || null }); });
 // 旧 URL -> uni-app H5 页面重定向（邮件链接与旧书签不失效）
 app.get('/report/:token', (req, res) => {
   if (isMobileUA(req.headers['user-agent'])) return res.redirect('/#/pages/report/detail?token=' + encodeURIComponent(req.params.token));

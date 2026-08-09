@@ -1,4 +1,4 @@
-// 简历打印版 HTML 生成：输出纯值（已复原填写）版本，与屏幕版 .resume-html 结构/class 一致
+﻿// 简历打印版 HTML 生成：输出纯值（已复原填写）版本，与屏幕版 .resume-html 结构/class 一致
 // 仅用于 window.print() 的 @media print 输出，规避浏览器不打印 input 值导致 PDF 缺内容
 import { escapeHtml, fillMasked } from './maskedText.js'
 
@@ -65,15 +65,66 @@ function renderContactHtml(contact, fills) {
   return html
 }
 
+// ---------- 原文头部块（kind='raw' 页眉） ----------
+function renderRawHeader(block, fills) {
+  const g = block && block.groups && block.groups[0]
+  if (!g || g.type !== 'header') return ''
+  let html = '<header class="rh-head">'
+  if (g.name) html += `<h1 class="rh-name">${esc(fillSeg(g.name, 'raw-name', fills))}</h1>`
+  if (g.lines && g.lines.length) {
+    html += '<div class="rh-contact">' + g.lines.map((ln, i) =>
+      `<span class="rh-contact-item"><span class="rh-contact-value">${esc(fillSeg(ln, 'raw-h' + i, fills))}</span></span>`
+    ).join('') + '</div>'
+  }
+  html += '</header>'
+  return html
+}
+
+// ---------- 原文描述块（text-first 排版，与屏幕版 segKey 一致） ----------
+function renderRawGroups(block, fills) {
+  const groups = block.groups || []
+  return groups.map((g, gi) => {
+    const key = s => `${block.id}-g${gi}` + (s === undefined || s === '' ? '' : '-' + s)
+    if (g.type === 'subhead') return `<div class="rh-subhead">${esc(fillSeg(g.text, key(''), fills))}</div>`
+    if (g.type === 'time') return `<div class="rh-raw-time">${esc(fillSeg(g.text, key(''), fills))}</div>`
+    if (g.type === 'entry') {
+      const title = (g.lines && g.lines[0]) || ''
+      const sub = (g.lines && g.lines.slice(1).join(' · ')) || ''
+      const timeHtml = g.time ? `<div class="rh-entry-time">${esc(g.time)}</div>` : ''
+      let head = `<div class="rh-entry-head"><strong class="rh-entry-title">${esc(fillSeg(title, key(0), fills))}</strong>`
+      if (sub) head += `<span class="rh-entry-sub">${esc(fillSeg(sub, key('sub'), fills))}</span>`
+      head += '</div>'
+      return `<article class="rh-entry">${timeHtml}<div class="rh-entry-main">${head}</div></article>`
+    }
+    if (g.type === 'list') {
+      const items = (g.items || []).map((it, li) => `<li>${esc(fillSeg(it, key(li), fills))}</li>`).join('')
+      return items ? `<ul class="rh-raw-list">${items}</ul>` : ''
+    }
+    return `<div class="rh-text">${esc(fillSeg(g.text, key(''), fills))}</div>`
+  }).join('')
+}
+
+// 职业模板徽标（与屏幕版一致，打印版同样输出）
+function occupationBadge(occ) {
+  if (!occ || !occ.id) return ''
+  const pct = Math.round((occ.confidence || 0) * 100)
+  const kw = Array.isArray(occ.matchedKeywords) && occ.matchedKeywords.length ? occ.matchedKeywords.slice(0, 4).map(k => k.k).join('、') : ''
+  const id = String(occ.id).replace(/[^\w-]/g, '')
+  const text = `职业模板：${occ.name || occ.id} · 置信度 ${pct}%` + (kw ? `（命中：${kw}）` : '')
+  return `<div class="rh-occupation-badge rh-occ-${esc(id)}">${esc(text)}</div>`
+}
+
 // ---------- 区块 ----------
 function renderBlock(block, fills) {
   const title = block.title ? `<h2 class="rh-h2">${esc(block.title)}</h2>` : ''
   let inner = ''
-  if (block.kind === 'list') inner = renderListBlock(block, fills)
+  if (block.kind === 'raw') inner = renderRawGroups(block, fills)
+  else if (block.kind === 'list') inner = renderListBlock(block, fills)
   else if (block.kind === 'skills') inner = renderSkillsBlock(block.data)
   else if (block.kind === 'lines') inner = renderLinesBlock(block, fills)
   else inner = renderText(block.data, block.id, fills)
-  return `<section class="rh-section ${block.id ? 'rh-' + esc(block.id) : ''}">${title}${inner}</section>`
+  const cls = ['rh-section', block.id ? 'rh-' + esc(block.id) : '', block.emphasis ? 'rh-emphasis' : '', block.emphasis === 'core' ? 'rh-emphasis-core' : '', block.emphasis === 'secondary' ? 'rh-emphasis-secondary' : ''].filter(Boolean).join(' ')
+  return `<section class="${cls}">${title}${inner}</section>`
 }
 
 function renderText(data, segKey, fills) {
@@ -132,8 +183,13 @@ function renderEntry(item, i, blockId, cfg, fills) {
 }
 
 // ---------- 主入口 ----------
-export function renderResumeHtml({ contact, blocks, fills }) {
-  const head = renderContactHtml(contact, fills || {})
-  const body = (blocks || []).map(b => renderBlock(b, fills || {})).join('')
-  return `<div class="resume-sheet-inner">${head}${body ? `<main class="rh-body">${body}</main>` : ''}</div>`
+export function renderResumeHtml({ contact, blocks, fills, occupation }) {
+  const f = fills || {}
+  const list = blocks || []
+  const headerBlock = list.find(b => b.id === 'header' && b.kind === 'raw')
+  const rawHead = headerBlock ? renderRawHeader(headerBlock, f) : ''
+  const head = rawHead || renderContactHtml(contact, f)
+  const body = list.filter(b => b.id !== 'header').map(b => renderBlock(b, f)).join('')
+  const badge = occupationBadge(occupation)
+  return `<div class="resume-sheet-inner">${badge}${head}${body ? `<main class="rh-body">${body}</main>` : ''}</div>`
 }

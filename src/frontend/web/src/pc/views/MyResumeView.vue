@@ -14,7 +14,7 @@
       <p v-if="hasFills" class="fine mask-clear"><button type="button" class="link-button" @click="clearFills">清空已填写的复原内容</button></p>
     </template>
     <article class="resume-document">
-      <ResumeHtmlView v-if="hasContent" :contact="contact" :blocks="blocks" :fills="fills" @fill="onFill" />
+      <ResumeHtmlView v-if="hasContent" :contact="contact" :blocks="blocks" :fills="fills" :occupation="occupation" @fill="onFill" />
       <p v-else class="resume-empty">{{ emptyText }}</p>
     </article>
   </section>
@@ -36,6 +36,7 @@ const signature = ref('')
 const contact = ref({})
 const blocks = ref([])
 const fills = ref({})
+const occupation = ref(null)
 const emptyText = ref('')
 
 const hasContent = computed(() => hasResume.value && blocks.value.length > 0)
@@ -91,10 +92,11 @@ onMounted(async () => {
     text.value = data.text || ''
     if (hasResume.value) {
       signature.value = resumeSignature(data.updatedAt, text.value)
-      // 结构化优先 + 文本兜底 + 自由区块 + 内容保护（数据源只读，不新增 AI 调用）
+      // 原文描述块优先（text-first 排版），结构化仅作兜底；数据源只读，不新增 AI 调用
       const result = buildBlocks({ structured: data.structured, text: text.value })
       contact.value = result.contact || {}
       blocks.value = result.blocks || []
+      occupation.value = result.occupation || null
       fills.value = readFills()
       // 自我完善一档观测埋点：仅本地控制台记录覆盖率，供后续沉淀进区块注册表
       if (result.coverage) {

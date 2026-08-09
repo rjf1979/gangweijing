@@ -12,6 +12,7 @@ const routes = [
       { path: 'users/:id', name: 'user-detail', component: () => import('./views/UserDetailView.vue'), meta: { title: '用户详情' } },
       { path: 'reports', name: 'reports', component: () => import('./views/ReportsView.vue'), meta: { title: '报告管理' } },
       { path: 'reports/:id', name: 'report-detail', component: () => import('./views/ReportDetailView.vue'), meta: { title: '报告详情' } },
+      { path: 'resume-templates', name: 'resume-templates', component: () => import('./views/ResumeStructureView.vue'), meta: { title: '简历结构' } },
       { path: 'ai-settings', name: 'ai-settings', component: () => import('./views/AiSettingsView.vue'), meta: { title: 'AI 设置' } },
       { path: 'settings', name: 'settings', component: () => import('./views/SettingsView.vue'), meta: { title: '系统设置' } },
     ],
@@ -45,3 +46,4 @@ router.afterEach((to) => {
 })
 
 export default router
+

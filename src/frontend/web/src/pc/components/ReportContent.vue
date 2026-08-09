@@ -1,9 +1,14 @@
-﻿<template>
+﻿﻿<template>
   <div class="report-heading">
     <p class="neo-tag neo-tag-lime">STEP 04 / 在线报告</p>
     <h2 id="report-title">{{ title }}</h2>
     <p id="summary" class="summary">{{ report.summary }}</p>
     <p class="report-disclaimer">分析结果基于简历与岗位文本，不代表实际录用概率。</p>
+  </div>
+
+  <div v-if="occupationBanner" class="neo-alert occupation-banner" :class="'neo-alert-' + occupationBanner.type" role="status">
+    <strong class="occupation-banner-head">{{ occupationBanner.head }}</strong>
+    <span class="occupation-banner-text">{{ occupationBanner.text }}</span>
   </div>
 
   <section class="neo-section neo-section-green" aria-labelledby="qualification-heading">
@@ -107,6 +112,7 @@ import { store } from '../store'
 const props = defineProps({
   report: { type: Object, required: true },
   meta: { type: Object, default: () => ({}) },
+  occupationMatch: { type: Object, default: null },
 })
 
 const copied = ref(false)
@@ -118,6 +124,27 @@ const title = computed(() => {
 const verifyItems = computed(() => {
   const risks = String(props.report.qualification?.risks || '').split(/[；;。\n]+/).map(s => s.trim()).filter(Boolean)
   return [...risks, ...(props.report.verify || [])]
+})
+
+// 岗位-简历职业一致性提示（后端 /api/reports/:token 返回 jobOccupation / resumeOccupation）
+const occupationBanner = computed(() => {
+  const job = props.occupationMatch?.jobOccupation
+  const resume = props.occupationMatch?.resumeOccupation
+  const jobName = job?.name || ''
+  const resumeName = resume?.name || ''
+  if (jobName && resumeName && job.id === resume.id) {
+    return { type: 'success', head: '职业方向一致', text: `岗位模板：${jobName} · 简历模板：${resumeName}，方向匹配，报告结论更可靠。` }
+  }
+  if (jobName && resumeName && job.id !== resume.id) {
+    return { type: 'warning', head: '职业方向存在差异', text: `岗位偏向${jobName}，简历侧重${resumeName}，建议针对目标岗位补充相关经历后再评估。` }
+  }
+  if (jobName) {
+    return { type: 'info', head: '岗位模板', text: `已按「${jobName}」模板评估目标岗位。` }
+  }
+  if (resumeName) {
+    return { type: 'info', head: '简历模板', text: `简历识别为「${resumeName}」方向。` }
+  }
+  return null
 })
 
 // ---------- 维度评分展示 ----------
