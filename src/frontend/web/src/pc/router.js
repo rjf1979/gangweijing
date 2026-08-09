@@ -7,6 +7,7 @@ import HomeView from './views/HomeView.vue'
 import VerificationView from './views/VerificationView.vue'
 import FlowView from './views/FlowView.vue'
 import MyResumeView from './views/MyResumeView.vue'
+import ResumeEditView from './views/ResumeEditView.vue'
 import ReportsView from './views/ReportsView.vue'
 import ShareReportView from './views/ShareReportView.vue'
 
@@ -24,6 +25,7 @@ const routes = [
   { path: '/job', name: 'job', component: FlowView, props: { step: 'job' }, meta: { requiresAuth: true } },
   { path: '/report', name: 'report', component: FlowView, props: { step: 'report' }, meta: { requiresAuth: true } },
   { path: '/my-resume', name: 'my-resume', component: MyResumeView, meta: { requiresAuth: true } },
+  { path: '/resume/edit', name: 'resume-edit', component: ResumeEditView, meta: { requiresAuth: true } },
   { path: '/reports', name: 'reports', component: ReportsView, meta: { requiresAuth: true } },
   { path: '/report/:token', name: 'share-report', component: ShareReportView },
 ]

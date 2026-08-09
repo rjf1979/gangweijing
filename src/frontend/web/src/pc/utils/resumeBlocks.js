@@ -150,7 +150,8 @@ export const BLOCK_DEFS = [
 export const FREE_TITLES = [
   '培训经历', '社团活动', '志愿者经历', '志愿者服务', '公益活动', '社会活动',
   '专利', '发表论文', '论文', '著作', '学术成果', '开源项目', '个人作品',
-  '语言能力', '兴趣爱好', '个人特长', '附加信息', '其他',
+  '语言能力', '兴趣爱好', '个人特长', '求职意向', '推荐人', '证明人',
+  '附加信息', '其他',
 ]
 
 // ---------- 职业模板强调区块（与后端 resumeOccupation.js EMPHASIS_SECTIONS 保持一致） ----------
@@ -182,7 +183,7 @@ const TITLE_TO_SECTION = {
   '推荐人': 'references', '证明人': 'references',
   '求职意向': 'job_intention', '期望职位': 'job_intention', '意向岗位': 'job_intention', '目标岗位': 'job_intention',
 }
-function sectionIdOfTitle(title) {
+export function sectionIdOfTitle(title) {
   const t = normalizeTitle(stripTitlePrefix(title))
   const def = defByTitle(title)
   if (def) return def.id
@@ -200,7 +201,7 @@ function annotateEmphasis(blocks, occupation) {
   if (!core.length && !secondary.length) return
   for (const b of blocks || []) {
     if (b.id === 'header') continue
-    const sid = sectionIdOfTitle(b.title)
+    const sid = sectionIdOfTitle(b.title) || b.id
     if (sid && core.includes(sid)) b.emphasis = 'core'
     else if (sid && secondary.includes(sid)) b.emphasis = 'secondary'
   }
@@ -317,7 +318,7 @@ function collectCoverage({ s, blocks, unknownTitles }) {
 }
 // ---------- 原文描述块解析（text-first 排版：不改原文、不调用 AI） ----------
 // 小节标题关键词：出现在行尾冒号前，作为区块内的强调小节
-const SUBHEAD_KEYWORDS = ['内容', '业绩', '职责', '工作内容', '主要工作', '工作职责', '岗位职责', '任职要求', '项目描述', '项目介绍', '负责内容', '主要职责', '自我评价', '个人优势', '技能', '技术栈', '专业能力', '职责描述', '工作描述', '项目成果', '项目业绩', '个人总结', '基本情况', '工作业绩']
+const SUBHEAD_KEYWORDS = ['内容', '业绩', '职责', '工作内容', '主要工作', '工作职责', '岗位职责', '任职要求', '项目描述', '项目介绍', '负责内容', '主要职责', '自我评价', '个人优势', '技能', '专业技能', '使用技能', '技术栈', '专业能力', '职责描述', '工作描述', '项目成果', '项目业绩', '个人总结', '基本情况', '工作业绩']
 const _Y = String.raw`\d{4}`
 const _M = String.raw`(?:[./\\-年]\d{1,2})?`
 const _YM = String.raw`${_Y}${_M}`
@@ -590,5 +591,241 @@ export function serializeBlocksToText(blocks) {
       }
     }
   }
+  return out.join('\n')
+}
+// ---------- 结构化 → 文本序列化（按职业模板编辑后保存用） ----------
+// 与 serializeBlocksToText（描述块反写）不同：本函数从「编辑后的结构化」生成完整简历文本，
+// 按职业模板的区块顺序重组，作为新的 resume_text（展示与 AI 分析共用）。
+// 标题别名与 buildBlocks 解析保持一致（含 FREE_TITLES 新增标题），保存后展示层可无缝解析。
+const _SERIALIZE_SECTIONS = [
+  { id: 'job_intention', title: '求职意向' },
+  { id: 'summary', title: '个人摘要' },
+  { id: 'self_evaluation', title: '自我评价' },
+  { id: 'skills', title: '技能特长' },
+  { id: 'work_experience', title: '工作经历' },
+  { id: 'project_experience', title: '项目经历' },
+  { id: 'education', title: '教育经历' },
+  { id: 'certificates', title: '证书资质' },
+  { id: 'awards', title: '获奖荣誉' },
+  { id: 'training', title: '培训经历' },
+  { id: 'languages', title: '语言能力' },
+  { id: 'volunteer', title: '志愿者经历' },
+  { id: 'social', title: '社团活动' },
+  { id: 'publications', title: '发表论文' },
+  { id: 'patents', title: '专利' },
+  { id: 'portfolio', title: '个人作品' },
+  { id: 'open_source', title: '开源项目' },
+  { id: 'references', title: '推荐人' },
+  { id: 'interests', title: '兴趣爱好' },
+]
+
+function _sv(v) { return String(v ?? '').trim() }
+function _svJoin(arr) { return (arr || []).map(x => String(x ?? '').trim()).filter(Boolean) }
+function _range(start, end) {
+  const a = _sv(start); const b = _sv(end)
+  if (!a && !b) return ''
+  if (a && b) return `${a}-${b}`
+  return a || b
+}
+function _pushLines(out, lines) {
+  for (const l of lines) if (String(l ?? '').trim()) out.push(String(l).trim())
+}
+function _sectionBreak(out) {
+  if (out.length && out[out.length - 1] !== '') out.push('')
+}
+
+function _serializeBasic(out, s) {
+  const b = s.basic || {}
+  const name = _sv(b.name)
+  if (name) out.push(name)
+  const meta = []
+  const g = _sv(b.gender); const y = _sv(b.birth_year)
+  if (g || y) meta.push([g, y].filter(Boolean).join(' · '))
+  if (_sv(b.phone)) meta.push(b.phone)
+  if (_sv(b.email)) meta.push(b.email)
+  if (_sv(b.location)) meta.push(b.location)
+  const cc = _sv(b.current_company); const ct = _sv(b.current_title)
+  if (cc || ct) meta.push([cc, ct].filter(Boolean).join(' '))
+  if (_sv(b.years_of_experience)) meta.push(b.years_of_experience)
+  if (_sv(b.expected_salary)) meta.push(b.expected_salary)
+  if (_sv(b.job_intention)) meta.push('求职意向：' + _sv(b.job_intention))
+  if (_sv(b.available_date)) meta.push(b.available_date)
+  if (meta.length) out.push(meta.join(' | '))
+}
+function _serializeJobIntention(out, s) {
+  const ji = s.job_intention || {}
+  const items = []
+  const map = [['target_position', '目标岗位'], ['expected_city', '期望城市'], ['expected_salary', '期望薪资'], ['job_type', '工作性质'], ['available_date', '到岗时间']]
+  for (const [k, label] of map) { const v = _sv(ji[k]); if (v) items.push(`${label}：${v}`) }
+  if (!items.length) return
+  _sectionBreak(out); out.push('求职意向'); _pushLines(out, items)
+}
+function _serializeText(out, title, text) {
+  const v = _sv(text)
+  if (!v) return
+  _sectionBreak(out); out.push(title); out.push(v)
+}
+function _serializeSkills(out, s) {
+  const sk = s.skills || {}
+  const groups = [['technical', '专业技能'], ['tools', '工具'], ['soft', '软技能'], ['languages', '语言']]
+  const lines = []
+  for (const [k, label] of groups) {
+    const arr = _svJoin(sk[k])
+    if (arr.length) lines.push(`${label}：${arr.join('、')}`)
+  }
+  if (!lines.length) return
+  _sectionBreak(out); out.push('技能特长'); _pushLines(out, lines)
+}
+function _serializeDutyList(list, label) {
+  const arr = _svJoin(list)
+  if (!arr.length) return []
+  const out = [`${label}：`]
+  for (const it of arr) out.push(`- ${it}`)
+  return out
+}
+function _serializeWork(out, s) {
+  const items = (s.work_experience || []).filter(x => x && typeof x === 'object')
+  if (!items.length) return
+  _sectionBreak(out); out.push('工作经历')
+  for (const it of items) {
+    const head = [it.company, it.title].map(_sv).filter(Boolean).join(' ')
+    const industry = _sv(it.industry)
+    const time = _range(it.start_date, it.end_date)
+    const lines = []
+    if (head) lines.push(head)
+    if (industry) lines.push('行业：' + industry)
+    if (time) lines.push(time)
+    const duties = _serializeDutyList(it.responsibilities, '工作职责')
+    const achievements = _serializeDutyList(it.achievements, '工作业绩')
+    const skillsUsed = _serializeDutyList(it.skills_used, '使用技能')
+    lines.push(...duties, ...achievements, ...skillsUsed)
+    _pushLines(out, lines)
+  }
+}
+function _serializeProject(out, s) {
+  const items = (s.project_experience || []).filter(x => x && typeof x === 'object')
+  if (!items.length) return
+  _sectionBreak(out); out.push('项目经历')
+  for (const it of items) {
+    const head = [it.name, it.role].map(_sv).filter(Boolean).join(' ')
+    const time = _range(it.start_date, it.end_date)
+    const lines = []
+    if (head) lines.push(head)
+    if (time) lines.push(time)
+    const desc = _sv(it.description)
+    if (desc) lines.push(desc)
+    const tech = _svJoin(it.tech_stack)
+    if (tech.length) lines.push(`技术：${tech.join('、')}`)
+    const ach = _serializeDutyList(it.achievements, '项目成果')
+    lines.push(...ach)
+    _pushLines(out, lines)
+  }
+}
+function _serializeEducation(out, s) {
+  const items = (s.education || []).filter(x => x && typeof x === 'object')
+  if (!items.length) return
+  _sectionBreak(out); out.push('教育经历')
+  for (const it of items) {
+    const head = [it.school, it.major, it.degree].map(_sv).filter(Boolean).join(' ')
+    const gpa = _sv(it.gpa)
+    const lines = []
+    if (head) lines.push(gpa ? `${head} · GPA ${gpa}` : head)
+    const time = _range(it.start_date, it.end_date)
+    if (time) lines.push(time)
+    for (const h of _svJoin(it.honors)) lines.push(`- ${h}`)
+    _pushLines(out, lines)
+  }
+}
+function _serializeLines(out, title, arr) {
+  const items = _svJoin(arr)
+  if (!items.length) return
+  _sectionBreak(out); out.push(title)
+  for (const it of items) out.push(`- ${it}`)
+}
+function _serializeObjItems(out, title, arr, keys) {
+  const items = (arr || []).filter(x => x && typeof x === 'object')
+  if (!items.length) return
+  _sectionBreak(out); out.push(title)
+  for (const it of items) {
+    const parts = []
+    for (const k of keys) { const v = _sv(it[k]); if (v) parts.push(v) }
+    if (parts.length) out.push(`- ${parts.join(' ')}`)
+  }
+}
+function _serializeExtras(out, s) {
+  for (const x of (s.extra_sections || [])) {
+    const title = _sv(x.title) || '附加信息'
+    const content = _sv(x.content)
+    if (!content) continue
+    _sectionBreak(out); out.push(title); out.push(content)
+  }
+}
+function _hasSectionData(id, s) {
+  switch (id) {
+    case 'job_intention': return Object.values(s.job_intention || {}).some(v => _sv(v))
+    case 'summary': return Boolean(_sv(s.summary))
+    case 'self_evaluation': return Boolean(_sv(s.self_evaluation))
+    case 'skills': return !skillsEmpty(s.skills)
+    case 'work_experience': return Array.isArray(s.work_experience) && s.work_experience.length > 0
+    case 'project_experience': return Array.isArray(s.project_experience) && s.project_experience.length > 0
+    case 'education': return Array.isArray(s.education) && s.education.length > 0
+    case 'certificates': return Array.isArray(s.certificates) && s.certificates.length > 0
+    case 'awards': return Array.isArray(s.awards) && s.awards.length > 0
+    case 'interests': return Array.isArray(s.interests) && s.interests.length > 0
+    case 'training': return Array.isArray(s.training) && s.training.length > 0
+    case 'languages': return Array.isArray(s.languages) && s.languages.length > 0
+    case 'volunteer': return Array.isArray(s.volunteer) && s.volunteer.length > 0
+    case 'social': return Array.isArray(s.social) && s.social.length > 0
+    case 'publications': return Array.isArray(s.publications) && s.publications.length > 0
+    case 'patents': return Array.isArray(s.patents) && s.patents.length > 0
+    case 'portfolio': return Array.isArray(s.portfolio) && s.portfolio.length > 0
+    case 'open_source': return Array.isArray(s.open_source) && s.open_source.length > 0
+    case 'references': return Array.isArray(s.references) && s.references.length > 0
+    default: return false
+  }
+}
+
+// 编辑保存入口：把编辑后的结构化按职业模板区块顺序序列化为纯文本
+export function structuredToText(structured, template) {
+  const s = normalizeStructured(structured)
+  const out = []
+  _serializeBasic(out, s)
+  const order = Array.isArray(template?.structure) ? template.structure.map(x => x && x.id).filter(Boolean) : []
+  const emitted = new Set()
+  const emit = (id) => {
+    if (emitted.has(id)) return
+    switch (id) {
+      case 'job_intention': _serializeJobIntention(out, s); break
+      case 'summary': _serializeText(out, '个人摘要', s.summary); break
+      case 'self_evaluation': _serializeText(out, '自我评价', s.self_evaluation); break
+      case 'skills': _serializeSkills(out, s); break
+      case 'work_experience': _serializeWork(out, s); break
+      case 'project_experience': _serializeProject(out, s); break
+      case 'education': _serializeEducation(out, s); break
+      case 'certificates': _serializeLines(out, '证书资质', s.certificates); break
+      case 'awards': _serializeLines(out, '获奖荣誉', s.awards); break
+      case 'interests': _serializeLines(out, '兴趣爱好', s.interests); break
+      case 'training': _serializeObjItems(out, '培训经历', s.training, ['name', 'institution', 'date', 'description']); break
+      case 'languages': _serializeObjItems(out, '语言能力', s.languages, ['language', 'fluency']); break
+      case 'volunteer': _serializeObjItems(out, '志愿者经历', s.volunteer, ['organization', 'role', 'date', 'description']); break
+      case 'social': _serializeObjItems(out, '社团活动', s.social, ['organization', 'role', 'date', 'description']); break
+      case 'publications': _serializeObjItems(out, '发表论文', s.publications, ['title', 'journal', 'date', 'authors']); break
+      case 'patents': _serializeObjItems(out, '专利', s.patents, ['name', 'patent_no', 'date', 'status']); break
+      case 'portfolio': _serializeObjItems(out, '个人作品', s.portfolio, ['name', 'url', 'description']); break
+      case 'open_source': _serializeObjItems(out, '开源项目', s.open_source, ['name', 'url', 'description']); break
+      case 'references': _serializeObjItems(out, '推荐人', s.references, ['name', 'company', 'title', 'contact']); break
+      default: return
+    }
+    emitted.add(id)
+  }
+  for (const id of order) {
+    if (id === 'basic' || id === 'extra') continue
+    if (!_hasSectionData(id, s)) continue
+    emit(id)
+  }
+  for (const sec of _SERIALIZE_SECTIONS) {
+    if (!emitted.has(sec.id) && _hasSectionData(sec.id, s)) emit(sec.id)
+  }
+  _serializeExtras(out, s)
   return out.join('\n')
 }

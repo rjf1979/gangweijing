@@ -3,6 +3,7 @@
     <div class="resume-toolbar">
       <div><p class="section-kicker">MY_RESUME</p><h1>我的简历</h1></div>
       <div class="resume-actions">
+        <router-link v-if="hasResume" class="neo-button neo-button-secondary" to="/resume/edit">编辑简历</router-link>
         <router-link class="neo-button neo-button-secondary" to="/resume?mode=replace">更新简历</router-link>
         <button id="print-resume" class="neo-button neo-button-primary" type="button" :disabled="!hasContent" @click="printPage">打印或保存 PDF</button>
       </div>
