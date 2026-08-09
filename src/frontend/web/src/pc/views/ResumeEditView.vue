@@ -211,6 +211,32 @@ function buildEditSections(s) {
   return { occ, tpl, sections: result }
 }
 
+// 从原文页眉行 / 补充信息区块提取基本信息回填 basic，保证纯文本简历保存后姓名/联系方式不丢失
+function fillBasicFromHeader(s, text) {
+  if (!text || !s || (s.basic && Object.values(s.basic).some(v => String(v || '').trim()))) return s
+  const basic = {}
+  const secs = parseTextSections(text)
+  const header = secs.find(x => x.title === null)
+  const extraSec = secs.find(x => x.title && ['补充信息', '附加信息', '其他'].includes(String(x.title).trim()))
+  const lines = [
+    ...(header ? String(header.content || '').split('\n') : []),
+    ...(extraSec ? String(extraSec.content || '').split('\n') : []),
+  ]
+  for (const raw of lines) {
+    const l = raw.trim()
+    if (!l) continue
+    if (!basic.name && !/[:：|]/.test(l) && l.length <= 8) basic.name = l
+    const phone = l.match(/1[3-9]\d\*{4}\d{4}/); if (phone && !basic.phone) basic.phone = phone[0]
+    const email = l.match(/[A-Za-z0-9_+-]\*{1,3}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/); if (email && !basic.email) basic.email = email[0]
+    if (!basic.gender) { const g = l.match(/男|女/); if (g) basic.gender = g[0] }
+    const birth = l.match(/生日[：:]\s*(\d{4})/); if (birth && !basic.birth_year) basic.birth_year = birth[1]
+    const exp = l.match(/工作经验[：:]\s*(\d+)\s*年/); if (exp && !basic.years_of_experience) basic.years_of_experience = exp[1] + '年'
+    if (!basic.location && !/[:：|]/.test(l) && /[\u4e00-\u9fa5]{2,8}(省|市|区|县)/.test(l)) basic.location = l
+  }
+  if (!Object.keys(basic).length) return s
+  return { ...s, basic: { ...(s.basic || {}), ...basic } }
+}
+
 function buildProtected(text, s) {
   const list = []
   if (!text) return list
@@ -219,12 +245,8 @@ function buildProtected(text, s) {
     const content = String(sec.content || '').trim()
     if (!content) continue
     if (sec.title === null) {
-      // 页眉行：仅保留基本信息未覆盖的行（限 4 行内，避免无标题整篇简历与表单重复）
-      const lines = content.split('\n').map(x => x.trim()).filter(Boolean)
-      if (lines.length > 4) continue
-      const covered = Object.values(s.basic || {}).map(v => String(v || '').trim()).filter(Boolean).join(' ')
-      const extra = lines.filter(l => !covered.includes(l))
-      if (extra.length) list.push({ title: '补充信息', content: extra.join('\n') })
+      // 页眉行即基本信息（姓名/联系方式等），由 basic 表单维护，不纳入补充信息
+      continue
     } else {
       const sid = sectionIdOfTitle(sec.title)
       if (sid === 'extra') {
@@ -268,12 +290,29 @@ function collectStructured(s) {
     }
   }
   // 未覆盖内容并入 extra_sections（同标题同内容去重，避免每轮保存重复累积）
-  const extras = Array.isArray(out.extra_sections) ? out.extra_sections.filter(x => x && typeof x === 'object') : []
+  // 历史遗留的「补充信息」若内容属于基本信息（姓名/电话/邮箱等），不再保留
+  const basicVals = Object.values(out.basic || {}).map(v => String(v || '').trim()).filter(Boolean)
+  const isBasicInfoExtra = (x) => {
+    const c = String(x.content || '').trim()
+    if (!c) return false
+    if (basicVals.some(v => v && c.includes(v))) return true
+    const lines = c.split('\n').map(l => l.trim()).filter(Boolean)
+    if (!lines.length) return false
+    // 每行都是基本信息特征（姓名/脱敏电话/脱敏邮箱/性别/生日/地址/年限）
+    const basicish = (l) => /1[3-9]\d\*{4}\d{4}|[A-Za-z0-9_+-]\*{1,3}@|男|女|生日|工作经验|^\d{4}\s*[年/-]|(省|市|区|县)$/.test(l)
+    return lines.length <= 4 && lines.every(basicish)
+  }
+  const extras = Array.isArray(out.extra_sections) ? out.extra_sections.filter(x => {
+    if (!x || typeof x !== 'object') return false
+    if (String(x.title || '').trim() !== '补充信息') return true
+    return !isBasicInfoExtra(x)
+  }) : []
   const seen = new Set(extras.map(x => `${x.title || '附加信息'}\u0000${x.content || ''}`))
   for (const p of protectedSections.value) {
     const content = String(p.content || '').trim()
     if (!content) continue
     const title = String(p.title || '附加信息').trim()
+    if (title === '补充信息' && isBasicInfoExtra({ content })) continue
     const key = `${title}\u0000${content}`
     if (seen.has(key)) continue
     seen.add(key)
@@ -330,7 +369,8 @@ onMounted(async () => {
       return
     }
     meta.value = `最近更新：${new Date(data.updatedAt).toLocaleString('zh-CN')}`
-    const s = normalizeStructured(data.structured)
+    let s = normalizeStructured(data.structured)
+    s = fillBasicFromHeader(s, data.text || '')
     structuredCache.value = s
     const { occ, tpl, sections: secs } = buildEditSections(s)
     occupationName.value = occ.name || tpl.name || '通用 / 综合'
