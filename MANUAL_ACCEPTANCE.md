@@ -199,3 +199,34 @@
 - 已部署：主服务 release 20260809032024（server.js 去除兜底）+ admin（server.js 移除 environment 下发 + dist 新产物 index-CeLuf8Rc.js），PM2 delete+start 均 online
 - 数据迁移：admin_settings 已写入 resend_api_key（SET len=36）+ email_from=report@zhicha.io，verify 通过
 - 部署核验：主服务 server.js 无 process.env.RESEND_API_KEY / EMAIL_FROM 引用；admin server.js 与 dist 均无 emailEnvConfigured；GET /、/pc/、/admin 均 200
+
+## 2026-08-09 · 修复后台邮箱配置「丢失」隐患：禁止启动/部署重置 admin_settings（已修复，待部署）
+
+**环境**：https://gwj.zhicha.io（管理后台 + PC 端）
+
+### 问题背景（用户反馈）
+- 用户反馈「服务配置状态」里之前配置过的邮箱信息丢失，怀疑发布部署时执行脚本把数据重置了。
+- 排查结论：
+  1. 部署脚本（deploy_*.sh）只做文件复制 + PM2 重启，从不执行任何数据库重置 SQL；git 历史无 DROP/TRUNCATE/DELETE admin_settings。
+  2. 生产库此前 admin_settings.resend_api_key 一直为空（从未在后台保存成功过），邮件实际靠 .env 环境变量兜底；后台「环境变量兜底」行此前显示「已配置」，故用户以为配置在数据库。
+  3. 唯一「启动时可能改写 admin_settings 用户数据」的代码是 admin db.js 的自愈 UPDATE：它会在站点名损坏时空/问号时连带清空 announcement 并刷新 updated_at——属危险模式，本次已收窄。
+
+### 开发要求（长期有效，禁止回退）
+- admin_settings 为后台关键用户配置表（站点名 / 公告 / 邮件密钥 / 并发数），任何启动 schema 或部署脚本都禁止重置其中的 announcement / resend_api_key / email_from 等用户字段。
+- 站点名自愈仅允许修复 site_name 本身，不得连带清空其他列或刷新 updated_at。
+- 邮件配置只能通过后台「邮件配置（Resend）」维护；.env 中的 RESEND_API_KEY / EMAIL_FROM 不再生效（上一条目）。
+
+### 确认项 1：服务配置状态显示已配置
+- 操作：登录管理后台 → 系统设置 → 服务配置状态
+- 预期：邮件密钥（数据库）显示「已配置」，发件人 report@zhicha.io 正常展示
+
+### 确认项 2：重启后配置不丢失
+- 操作：部署/重启后台服务后再次查看
+- 预期：邮件密钥与公告内容保持不变，updated_at 不被无谓刷新
+
+### 确认项 3：公告内容保持
+- 操作：后台公告内容查看
+- 预期：已填写的公告内容不被清空
+
+### 线上验证结果（部署后回填）
+- 待部署

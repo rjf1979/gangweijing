@@ -40,7 +40,9 @@ ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS resend_api_key text;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS email_from text;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS analysis_concurrency integer NOT NULL DEFAULT 2;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS announcement_updated_at timestamptz;
--- 自愈：历史编码问题可能导致默认站点名被写成问号/空，启动时自动重置为默认值（不覆盖用户后期修改）
+-- 自愈：历史编码问题可能导致默认站点名被写成问号/空，启动时仅修复站点名本身。
+-- 注意：admin_settings 为后台用户配置表，公告/邮件密钥等均为用户数据，
+-- 任何启动/部署逻辑均禁止重置 announcement / resend_api_key / email_from 等用户字段
 CREATE TABLE IF NOT EXISTS ai_models (
   id uuid PRIMARY KEY,
   provider text NOT NULL,
@@ -94,7 +96,7 @@ CREATE TABLE IF NOT EXISTS ai_model_reference_prices (
   UNIQUE (model_id)
 );
 UPDATE admin_settings
-SET site_name = '岗位镜管理后台', announcement = '', updated_at = now()
+SET site_name = '岗位镜管理后台'
 WHERE id = 1 AND (site_name IS NULL OR site_name = '' OR site_name ~ '^[?]+$');
 `;
 
