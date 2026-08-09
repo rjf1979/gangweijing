@@ -14,7 +14,7 @@
       <div class="field-block"><label for="job-title">岗位名称</label><input id="job-title" v-model="jobTitle" placeholder="例如：产品经理"></div>
     </div>
     <p id="job-error" class="error" role="alert">{{ error }}</p>
-    <div class="action-row"><button class="neo-button neo-button-secondary" type="button" @click="emit('back', 'facts')">返回事实</button><button id="job-next" class="neo-button neo-button-primary" type="button" :disabled="submitting" @click="submit">{{ submitting ? 'AI 分析中…' : '确认岗位，生成报告' }}</button></div>
+    <div class="action-row"><button class="neo-button neo-button-secondary" type="button" :disabled="submitting" @click="emit('back', 'facts')">返回事实</button><button id="job-next" class="neo-button neo-button-primary" type="button" :disabled="submitting" @click="submit">{{ submitting ? 'AI 分析中…' : '确认岗位，生成报告' }}</button></div>
   </article>
 </template>
 
