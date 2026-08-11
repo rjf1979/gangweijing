@@ -869,6 +869,8 @@ const publicGenJob = job => ({
   templateId: job.templateId || null,
   templateName: job.templateName || null,
   error: job.error || null,
+  canceledAt: job.canceledAt ? iso(job.canceledAt) : null,
+  retriedFrom: job.retriedFrom || null,
 });
 
 async function runAiGenerateJob(job) {
@@ -930,7 +932,7 @@ async function processAiQueue() {
     while (aiGenQueue.length) {
       const jobId = aiGenQueue[0];
       const job = aiGenJobs.get(jobId);
-      if (!job) { aiGenQueue.shift(); continue; }
+      if (!job || job.status === 'canceled') { aiGenQueue.shift(); continue; }
       try {
         await runAiGenerateJob(job);
       } catch (error) {
@@ -959,6 +961,8 @@ function createAiGenerateJob(occupationId, styleNote) {
     templateId: null,
     templateName: null,
     error: null,
+    canceledAt: null,
+    retriedFrom: null,
   };
   aiGenJobs.set(job.id, job);
 
@@ -988,6 +992,58 @@ app.get('/api/admin/resume-templates/generate-jobs/:jobId', requireAdmin, async 
   res.json({ job: publicGenJob(job) });
 });
 
+
+// 任务列表管理：取消排队 / 失败或已取消重试 / 清空已完成历史（保留进行中与排队中）
+app.post('/api/admin/resume-templates/generate-jobs/clear-history', requireAdmin, async (req, res) => {
+  let removed = 0;
+  for (const [id, job] of aiGenJobs) {
+    if (job.status === 'done' || job.status === 'error' || job.status === 'canceled') {
+      aiGenJobs.delete(id);
+      removed++;
+    }
+  }
+  // 同步清理队列中已删除或已终态的任务引用，保持排队计数准确
+  for (let i = aiGenQueue.length - 1; i >= 0; i--) {
+    const qid = aiGenQueue[i];
+    const qjob = aiGenJobs.get(qid);
+    if (!qjob || qjob.status === 'done' || qjob.status === 'error' || qjob.status === 'canceled') {
+      aiGenQueue.splice(i, 1);
+    }
+  }
+  res.json({ ok: true, removed, queued: aiGenQueue.length });
+});
+
+app.post('/api/admin/resume-templates/generate-jobs/:jobId/cancel', requireAdmin, async (req, res) => {
+  const job = aiGenJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: '生成任务不存在或已过期（服务可能已重启）。' });
+  if (job.status === 'running') return res.status(400).json({ error: '任务正在生成中，无法取消。' });
+  if (job.status === 'done') return res.status(400).json({ error: '任务已完成，无需取消。' });
+  if (job.status === 'error') return res.status(400).json({ error: '任务已失败，请使用「重试」或清空历史。' });
+  if (job.status === 'canceled') return res.status(400).json({ error: '任务已取消。' });
+  job.status = 'canceled';
+  job.canceledAt = new Date();
+  job.finishedAt = new Date();
+  const qi = aiGenQueue.indexOf(job.id);
+  if (qi !== -1) aiGenQueue.splice(qi, 1);
+  res.json({ ok: true, job: publicGenJob(job) });
+});
+
+app.post('/api/admin/resume-templates/generate-jobs/:jobId/retry', requireAdmin, async (req, res) => {
+  const job = aiGenJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: '生成任务不存在或已过期（服务可能已重启）。' });
+  if (job.status !== 'error' && job.status !== 'canceled') return res.status(400).json({ error: '仅失败或已取消的任务可以重试。' });
+  job.status = 'pending';
+  job.error = null;
+  job.canceledAt = null;
+  job.startedAt = null;
+  job.finishedAt = null;
+  job.templateId = null;
+  job.templateName = null;
+  if (!job.retriedFrom) job.retriedFrom = job.id;
+  aiGenQueue.push(job.id);
+  processAiQueue().catch(() => {});
+  res.json({ ok: true, job: publicGenJob(job) });
+});
 app.get('/api/admin/resume-templates/:id', requireAdmin, async (req, res) => {
   const t = await store.getResumeTemplate(req.params.id);
   if (!t) return res.status(404).json({ error: '模板不存在。' });

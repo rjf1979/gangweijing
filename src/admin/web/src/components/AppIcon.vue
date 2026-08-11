@@ -137,6 +137,18 @@
       <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
     </template>
+    <template v-else-if="name === 'refresh'">
+      <polyline points="23 4 23 10 17 10" />
+      <polyline points="1 20 1 14 7 14" />
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+    </template>
+    <template v-else-if="name === 'pause'">
+      <rect x="6" y="4" width="4" height="16" />
+      <rect x="14" y="4" width="4" height="16" />
+    </template>
+    <template v-else-if="name === 'play'">
+      <polygon points="5 3 19 12 5 21 5 3" />
+    </template>
     <template v-else>
       <circle cx="12" cy="12" r="10" />
     </template>

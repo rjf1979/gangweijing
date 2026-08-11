@@ -115,11 +115,13 @@ CREATE TABLE IF NOT EXISTS resume_templates (
 ALTER TABLE resume_templates ADD COLUMN IF NOT EXISTS is_default boolean NOT NULL DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_resume_templates_one_default_per_occupation
   ON resume_templates (occupation_id) WHERE is_default;
--- 存量数据每职业一行，全部设为默认
+-- 存量数据：仅当某职业尚无默认模板时，补选最早一套为默认（已有默认的职业跳过，避免唯一索引冲突）
 UPDATE resume_templates SET is_default = true
   WHERE id IN (
     SELECT DISTINCT ON (occupation_id) id FROM resume_templates
-    WHERE NOT is_default ORDER BY occupation_id, created_at, id
+    WHERE NOT is_default
+      AND occupation_id NOT IN (SELECT DISTINCT occupation_id FROM resume_templates WHERE is_default)
+    ORDER BY occupation_id, created_at, id
   );
 `;
 

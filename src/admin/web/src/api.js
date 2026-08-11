@@ -141,6 +141,15 @@ export const api = {
     const data = await request(`/resume-templates/generate-jobs/${jobId}`)
     return data.job
   },
+  async cancelGenerateJob(jobId) {
+    return request(`/resume-templates/generate-jobs/${jobId}/cancel`, { method: 'POST' })
+  },
+  async retryGenerateJob(jobId) {
+    return request(`/resume-templates/generate-jobs/${jobId}/retry`, { method: 'POST' })
+  },
+  async clearGenerateJobs() {
+    return request('/resume-templates/generate-jobs/clear-history', { method: 'POST' })
+  },
   async setDefaultResumeTemplate(id) {
     return request(`/resume-templates/${id}/set-default`, { method: 'POST' })
   },
