@@ -1,4 +1,4 @@
-// 简历模板轻量渲染引擎（管理后台预览 + 将来用户端复用）
+﻿// 简历模板轻量渲染引擎（管理后台预览 + 将来用户端复用）
 // 语法：
 //   {{field}}            字段（支持 a.b 点号路径；数组自动用「、」连接；HTML 转义）
 //   {{.}}                循环块内当前字符串项
@@ -64,8 +64,33 @@ function expand(tpl, ctx) {
   return s
 }
 
+
+// 头像兜底：模板未声明 {{avatar}} 占位时，若提供了头像 URL，
+// 自动把模板中的姓名圆（class 含 avatar 的元素）升级为头像图片。
+// 保证「我的简历 / 编辑预览」里上传的头像在任意模板视图中都能展示。
+function ensureAvatar(html, avatarUrl) {
+  if (!avatarUrl) return html
+  const url = String(avatarUrl)
+  // 渲染结果已引用该头像 URL：模板自带 {{avatar}}，无需兜底
+  if (html.includes(url)) return html
+  // 候选 class：avatar 系（姓名圆/头像位）优先，其次 profile-mark/photo/portrait 等常见头像位
+  const classRe = 'avatar|profile-mark|profile_photo|headshot|portrait|photo|avatar-photo|avatar-wrap|avatar-box'
+  const re = new RegExp('<([a-zA-Z][\\w-]*)([^>]*\\bclass\\s*=\\s*["\'][^"\']*\\b(' + classRe + ')\\b[^"\']*["\'][^>]*)>([\\s\\S]*?)<\\/\\1>', 'i')
+  const m = re.exec(html)
+  if (!m) return html
+  // 元素内部已有 img（模板自带头像位），不覆盖
+  if (/<img[\s>]/i.test(m[4])) return html
+  const tag = m[1]
+  const attrs = m[2]
+  const safeUrl = url.replace(/"/g, '&quot;')
+  const img = '<img src="' + safeUrl + '" alt="头像" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block">'
+  return html.slice(0, m.index) + '<' + tag + attrs + '>' + img + '</' + tag + '>' + html.slice(m.index + m[0].length)
+}
+
 // basic 展开到顶层，模板可直接写 {{name}} 而非 {{basic.name}}
 export function renderTemplate(template, data) {
   const ctx = { ...((data && data.basic) || {}), ...(data || {}) }
-  return expand(template, ctx)
+  let html = expand(template, ctx)
+  html = ensureAvatar(html, data && data.avatar)
+  return html
 }
