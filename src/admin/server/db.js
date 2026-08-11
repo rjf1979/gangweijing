@@ -547,9 +547,6 @@ export function createPgStore() {
       );
       return rows;
     },
-    async setUserTest(id, isTest) {
-      await pool.query('UPDATE ' + userTable + ' SET is_test = $1 WHERE id = $2', [Boolean(isTest), id]);
-    },
     async getUserInviteInfo(id) {
       const { rows } = await pool.query(
         `SELECT u.invite_code, u.invited_by, u.is_test,

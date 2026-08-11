@@ -380,18 +380,10 @@ app.get('/api/admin/users/:id', requireAdmin, async (req, res) => {
 app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
   const user = await store.getUserById(req.params.id);
   if (!user) return res.status(404).json({ error: '用户不存在。' });
+  if (!user.is_test) return res.status(403).json({ error: '仅测试用户可删除。' });
   await removeUserResumeDir(user);
   await store.deleteUser(user.id);
   res.json({ ok: true, deleted: user.id });
-});
-
-// 标记/取消标记测试用户（管理员）
-app.patch('/api/admin/users/:id', express.json(), requireAdmin, async (req, res) => {
-  const user = await store.getUserById(req.params.id);
-  if (!user) return res.status(404).json({ error: '用户不存在。' });
-  if (typeof req.body?.isTest !== 'boolean') return res.status(400).json({ error: '缺少 isTest 参数。' });
-  await store.setUserTest(user.id, req.body.isTest);
-  res.json({ ok: true, id: user.id, isTest: req.body.isTest });
 });
 
 // ===== 用户原始简历文件管理 =====

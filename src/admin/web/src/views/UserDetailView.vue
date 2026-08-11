@@ -25,10 +25,7 @@
             </div>
           </div>
           <div class="profile-actions">
-            <button class="btn" type="button" :disabled="busy" @click="toggleTest">
-              <AppIcon name="flag" :size="15" /> {{ user.isTest ? '取消测试标记' : '标记为测试用户' }}
-            </button>
-            <button class="btn btn-danger" type="button" @click="askDelete">
+            <button v-if="user.isTest" class="btn btn-danger" type="button" @click="askDelete">
               <AppIcon name="trash" :size="15" /> 删除用户
             </button>
           </div>
@@ -298,21 +295,6 @@ const inviteLink = computed(() => {
 function copyText(text) {
   if (!text) return
   navigator.clipboard?.writeText(text).then(() => toast('已复制', 'success')).catch(() => toast('复制失败', 'error'))
-}
-async function toggleTest() {
-  const target = user.value
-  if (!target) return
-  busy.value = true
-  try {
-    const next = !target.isTest
-    const data = await api.patch(`/users/${userId.value}`, { isTest: next })
-    target.isTest = data.isTest
-    toast(next ? '已标记为测试用户' : '已取消测试标记', 'success')
-  } catch (err) {
-    toast(err.message || '操作失败', 'error')
-  } finally {
-    busy.value = false
-  }
 }
 const emailStatusLabel = computed(() => {
   const map = { none: '未发送', sent: '已发送', failed: '发送失败', verified: '已验证' }

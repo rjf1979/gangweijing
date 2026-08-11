@@ -64,10 +64,7 @@
               </td>
               <td class="cell-num">{{ user.invite_count ?? 0 }}</td>
               <td class="cell-actions">
-                <button class="btn btn-sm" type="button" :disabled="togglingId === user.id" @click.stop="toggleTest(user)">
-                  <AppIcon name="flag" :size="13" /> {{ user.is_test ? '取消测试' : '标记测试' }}
-                </button>
-                <button class="btn btn-danger btn-sm" type="button" @click.stop="askDelete(user)">
+                <button v-if="user.is_test" class="btn btn-danger btn-sm" type="button" @click.stop="askDelete(user)">
                   <AppIcon name="trash" :size="14" /> 删除
                 </button>
               </td>
@@ -131,7 +128,6 @@ const loading = ref(false)
 const error = ref('')
 const deleteTarget = ref(null)
 const deleting = ref(false)
-const togglingId = ref(null)
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
 const pageNumbers = computed(() => {
@@ -181,19 +177,6 @@ function goPage(next) {
 function askDelete(user) {
   deleteTarget.value = user
 }
-async function toggleTest(user) {
-  togglingId.value = user.id
-  try {
-    await api.patch(`/users/${user.id}`, { isTest: !user.is_test })
-    user.is_test = !user.is_test
-    toast(user.is_test ? '已标记为测试用户' : '已取消测试标记', 'success')
-  } catch (err) {
-    toast(err.message || '操作失败', 'error')
-  } finally {
-    togglingId.value = null
-  }
-}
-
 async function confirmDelete() {
   const target = deleteTarget.value
   if (!target) return
