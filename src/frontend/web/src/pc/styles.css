@@ -1282,3 +1282,68 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
 @media (max-width: 640px) {
   .avatar-card-body { align-items: flex-start; }
 }
+
+/* ===== 邀请好友弹窗（用户邀请机制外链） ===== */
+.invite-mask {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--layer-loading) + 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: var(--color-scrim);
+}
+.invite-dialog {
+  width: min(560px, 100%);
+  max-height: 84dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-hard-md);
+}
+.invite-title {
+  margin: 0;
+  padding: var(--space-3) var(--space-5);
+  font-size: 20px;
+  font-weight: 800;
+  border-bottom: var(--border-thin);
+  background: var(--color-lime);
+}
+.invite-body { padding: var(--space-5); overflow: auto; display: grid; gap: var(--space-4); }
+.invite-lead { margin: 0; font-weight: 600; }
+.invite-status { margin: 0; color: var(--color-muted); }
+.invite-row { display: flex; gap: var(--space-3); align-items: baseline; margin: 0; }
+.invite-row dt { flex: 0 0 auto; font-weight: 700; }
+.invite-row dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.invite-field { display: grid; gap: var(--space-2); }
+.invite-field-label { font-size: 13px; font-weight: 700; color: var(--color-muted); }
+.invite-field-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.invite-code, .invite-link {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+.invite-code { font-weight: 800; letter-spacing: 0.5px; }
+.invite-copy { margin: 0; flex: 0 0 auto; }
+.invite-stat { margin: 0; font-size: 14px; }
+.invite-stat strong { font-size: 18px; }
+.invite-tip { margin: 0; }
+.invite-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-4) var(--space-5);
+  border-top: var(--border-thin);
+  background: var(--color-surface-muted);
+}
+.invite-hint { margin: 0 0 var(--space-2); }

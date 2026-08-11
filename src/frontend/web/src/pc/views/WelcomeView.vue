@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <section id="welcome" class="welcome auth-layout" aria-labelledby="welcome-title">
     <div class="auth-intro">
       <p class="neo-tag neo-tag-lime">JOB_MIRROR AI</p>
@@ -6,6 +6,9 @@
       <p class="lead">上传简历和目标岗位，AI 会拆解证据、缺口和可执行的优化方向。</p>
     </div>
     <form id="onboarding" class="neo-panel auth-panel" @submit.prevent="submit">
+      <p v-if="inviteCode" id="invite-hint" class="neo-alert neo-alert-info invite-hint" role="status">
+        🎁 你已通过邀请链接访问，注册后自动与邀请人建立关联。
+      </p>
       <label for="onboard-email">邮箱</label>
       <input id="onboard-email" v-model.trim="email" type="email" autocomplete="email" inputmode="email" required>
       <label for="onboard-password">密码</label>
@@ -28,17 +31,21 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { store, saveDraft, showLoading, hideLoading } from '../store'
 
+const route = useRoute()
 const router = useRouter()
 const loginMode = ref(true)
 const email = ref('')
 const password = ref('')
 const error = ref('')
 const submitting = ref(false)
+
+// 邀请外链参数：注册时提交给服务端，把新账号与邀请人绑定
+const inviteCode = computed(() => String(route.query.invite || '').trim().slice(0, 32))
 
 function toggleMode() {
   loginMode.value = !loginMode.value
@@ -53,6 +60,7 @@ async function submit() {
     const data = await api.post(loginMode.value ? '/api/login' : '/api/register', {
       email: email.value,
       password: password.value,
+      ...(loginMode.value ? {} : { invite: inviteCode.value }),
     })
     store.authenticated = true
     store.user = data.user

@@ -20,10 +20,14 @@
             <h2 class="profile-email">{{ user.email }}</h2>
             <div class="profile-tags">
               <StatusBadge :value="user.emailVerifiedAt ? 'verified' : 'none'" />
+              <span v-if="user.isTest" class="badge badge-warning" title="测试用户">测试用户</span>
               <span class="badge badge-neutral">注册于 {{ formatDate(user.createdAt) }}</span>
             </div>
           </div>
           <div class="profile-actions">
+            <button class="btn" type="button" :disabled="busy" @click="toggleTest">
+              <AppIcon name="flag" :size="15" /> {{ user.isTest ? '取消测试标记' : '标记为测试用户' }}
+            </button>
             <button class="btn btn-danger" type="button" @click="askDelete">
               <AppIcon name="trash" :size="15" /> 删除用户
             </button>
@@ -37,6 +41,30 @@
           <div class="profile-item">
             <dt>邮箱验证时间</dt>
             <dd>{{ formatDateTime(user.emailVerifiedAt) }}</dd>
+          </div>
+          <div class="profile-item">
+            <dt>邀请码</dt>
+            <dd v-if="user.inviteCode" class="invite-cell">
+              <code class="invite-code">{{ user.inviteCode }}</code>
+              <button class="btn btn-sm" type="button" @click="copyText(user.inviteCode)">复制</button>
+            </dd>
+            <dd v-else>—</dd>
+          </div>
+          <div class="profile-item">
+            <dt>邀请链接</dt>
+            <dd v-if="user.inviteCode" class="invite-cell">
+              <code class="invite-link">{{ inviteLink }}</code>
+              <button class="btn btn-sm" type="button" @click="copyText(inviteLink)">复制</button>
+            </dd>
+            <dd v-else>—</dd>
+          </div>
+          <div class="profile-item">
+            <dt>邀请人</dt>
+            <dd>{{ user.invitedByEmail || '—' }}</dd>
+          </div>
+          <div class="profile-item">
+            <dt>邀请人数</dt>
+            <dd class="cell-num">{{ user.inviteCount ?? 0 }} 人</dd>
           </div>
           <div class="profile-item">
             <dt>简历更新</dt>
@@ -263,6 +291,29 @@ const sectionStats = computed(() => {
 })
 
 const charAt0 = computed(() => String(user.value?.email || '?').charAt(0))
+const inviteLink = computed(() => {
+  const code = user.value?.inviteCode
+  return code ? window.location.origin + '/login?invite=' + encodeURIComponent(code) : ''
+})
+function copyText(text) {
+  if (!text) return
+  navigator.clipboard?.writeText(text).then(() => toast('已复制', 'success')).catch(() => toast('复制失败', 'error'))
+}
+async function toggleTest() {
+  const target = user.value
+  if (!target) return
+  busy.value = true
+  try {
+    const next = !target.isTest
+    const data = await api.patch(`/users/${userId.value}`, { isTest: next })
+    target.isTest = data.isTest
+    toast(next ? '已标记为测试用户' : '已取消测试标记', 'success')
+  } catch (err) {
+    toast(err.message || '操作失败', 'error')
+  } finally {
+    busy.value = false
+  }
+}
 const emailStatusLabel = computed(() => {
   const map = { none: '未发送', sent: '已发送', failed: '发送失败', verified: '已验证' }
   return map[user.value?.verificationEmailStatus] || user.value?.verificationEmailStatus || '—'
@@ -422,6 +473,9 @@ onMounted(load)
   gap: 8px;
   flex-wrap: wrap;
 }
+.invite-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.invite-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 700; letter-spacing: 0.5px; }
+.invite-link { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; word-break: break-all; }
 .profile-actions {
   flex-shrink: 0;
 }

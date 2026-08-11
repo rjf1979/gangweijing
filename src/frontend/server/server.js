@@ -394,19 +394,60 @@ app.use((req, res, next) => {
 });
 app.use(express.static(h5Dir));
 app.get('/', sendH5);
+// 邀请码：新用户自动分配唯一邀请码；注册时可通过 ?invite= 外链绑定邀请人
+function randomInviteCode() {
+  return crypto.randomBytes(5).toString('base64url').replace(/[-_]/g, '').toUpperCase().slice(0, 8);
+}
+async function ensureInviteCode(db, user) {
+  if (user.inviteCode) return user.inviteCode;
+  let code = null;
+  for (let i = 0; i < 5; i++) {
+    const candidate = randomInviteCode();
+    if (!db.users.some(u => u.inviteCode === candidate)) { code = candidate; break; }
+  }
+  if (!code) code = 'U' + String(user.id).replace(/-/g, '').slice(0, 8).toUpperCase();
+  user.inviteCode = code;
+  return code;
+}
+const inviteUrl = user => publicAppUrl() + '/login?invite=' + encodeURIComponent(user.inviteCode || '');
+
 app.post('/api/register', async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, invite } = req.body;
   const normalizedEmail = String(email || '').trim().toLowerCase();
   if (!/^\S+@\S+\.\S+$/.test(normalizedEmail) || (password || '').length < 8) return res.status(400).json({ error: '请输入有效邮箱和至少 8 位密码。' });
   const db = await readDb(); db.sessions ||= []; if (db.users.some(user => user.email === normalizedEmail)) return res.status(409).json({ error: '该邮箱已注册，请直接登录。' });
-  const user = { id: crypto.randomUUID(), email: normalizedEmail, passwordHash: hash(password), emailVerifiedAt: null, createdAt: new Date().toISOString() };
+  const user = { id: crypto.randomUUID(), email: normalizedEmail, passwordHash: hash(password), emailVerifiedAt: null, createdAt: new Date().toISOString(), isTest: false };
+  await ensureInviteCode(db, user);
+  const inviteCode = String(invite || '').trim();
+  if (inviteCode && inviteCode !== user.inviteCode) {
+    const inviter = db.users.find(u => u.inviteCode === inviteCode && u.id !== user.id);
+    if (inviter) user.invitedBy = inviter.id;
+  }
   const verificationToken = issueVerification(user); db.users.push(user); const token = crypto.randomBytes(32).toString('hex'); db.sessions.push({ token, userId: user.id, expiresAt: new Date(Date.now() + 30 * 86400000).toISOString() }); await saveDb(db);
   let verificationEmailSent = false; try { user.verificationMessageId = await sendVerificationEmail(user.email, verificationToken); user.verificationEmailStatus = 'sent'; verificationEmailSent = true; } catch (error) { user.verificationEmailStatus = 'failed'; user.verificationEmailError = error.message; } await saveDb(db);
   res.setHeader('Set-Cookie', sessionCookie(token)); res.json({ user: { id: user.id, email: user.email, emailVerified: false }, verificationEmailSent });
 });
 app.post('/api/login', async (req, res) => { const { email, password } = req.body; const db = await readDb(); db.sessions ||= []; const user = db.users.find(x => x.email === String(email || '').trim().toLowerCase() && x.passwordHash === hash(password || '')); if (!user) return res.status(401).json({ error: '邮箱或密码不正确。' }); const token = crypto.randomBytes(32).toString('hex'); db.sessions.push({ token, userId: user.id, expiresAt: new Date(Date.now() + 30 * 86400000).toISOString() }); await saveDb(db); res.setHeader('Set-Cookie', sessionCookie(token)); res.json({ user: { id: user.id, email: user.email, emailVerified: Boolean(user.emailVerifiedAt) } }); });
-app.get('/api/session', async (req, res) => { const db = await readDb(); const session = currentSession(req, db); const user = session && db.users.find(x => x.id === session.userId); res.json({ authenticated: Boolean(user), user: user ? { id: user.id, email: user.email, emailVerified: Boolean(user.emailVerifiedAt) } : null }); });
+app.get('/api/session', async (req, res) => { const db = await readDb(); const session = currentSession(req, db); const user = session && db.users.find(x => x.id === session.userId); res.json({ authenticated: Boolean(user), user: user ? { id: user.id, email: user.email, emailVerified: Boolean(user.emailVerifiedAt), inviteCode: user.inviteCode || null, isTest: Boolean(user.isTest) } : null }); });
 app.post('/api/logout', async (req, res) => { const db = await readDb(); const session = currentSession(req, db); if (session) { db.sessions = (db.sessions || []).filter(x => x.token !== session.token); await saveDb(db); } res.setHeader('Set-Cookie', 'jm_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({ ok: true }); });
+
+// 我的邀请：返回本人邀请链接与邀请统计（供前端「邀请好友」外链展示）
+app.get('/api/me/invite', async (req, res) => {
+  const db = await readDb();
+  const user = currentUser(req, db);
+  if (!user) return res.status(401).json({ error: '请先登录。' });
+  await ensureInviteCode(db, user);
+  await saveDb(db);
+  const invitedCount = (db.users || []).filter(u => u.invitedBy === user.id).length;
+  const inviter = user.invitedBy ? db.users.find(u => u.id === user.invitedBy) : null;
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({
+    code: user.inviteCode,
+    link: inviteUrl(user),
+    inviteCount: invitedCount,
+    invitedBy: inviter ? { id: inviter.id, email: inviter.email } : null,
+  });
+});
 
 app.get('/api/config', async (req, res) => {
   await refreshAppConfig(); // 每次读取最新后台配置，公告修改后无需重启即生效

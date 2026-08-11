@@ -22,25 +22,32 @@
           <thead>
             <tr>
               <th>邮箱</th>
+              <th>类型</th>
               <th>注册时间</th>
               <th>邮箱验证</th>
               <th>简历</th>
               <th class="cell-num">报告数</th>
+              <th>邀请人</th>
+              <th class="cell-num">邀请人数</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody v-if="loading">
             <tr v-for="i in 6" :key="i">
-              <td colspan="6"><div class="skeleton row-skeleton"></div></td>
+              <td colspan="9"><div class="skeleton row-skeleton"></div></td>
             </tr>
           </tbody>
           <tbody v-else-if="error">
-            <tr><td colspan="6" class="cell-muted" role="alert">{{ error }}</td></tr>
+            <tr><td colspan="9" class="cell-muted" role="alert">{{ error }}</td></tr>
           </tbody>
           <tbody v-else-if="users.length">
             <tr v-for="user in users" :key="user.id" class="row-link" @click="$router.push(`/users/${user.id}`)">
               <td>
                 <span class="user-email">{{ user.email }}</span>
+              </td>
+              <td>
+                <span v-if="user.is_test" class="badge badge-warning" title="测试用户">测试</span>
+                <span v-else class="cell-muted">正式</span>
               </td>
               <td class="cell-secondary cell-num">{{ formatDateTime(user.created_at) }}</td>
               <td>
@@ -51,7 +58,15 @@
                 <span v-else class="cell-muted">—</span>
               </td>
               <td class="cell-num">{{ user.report_count ?? '—' }}</td>
+              <td class="cell-secondary">
+                <RouterLink v-if="user.invited_by_email" class="inviter-link" :to="`/users/${user.invited_by}`" @click.stop>{{ user.invited_by_email }}</RouterLink>
+                <span v-else class="cell-muted">—</span>
+              </td>
+              <td class="cell-num">{{ user.invite_count ?? 0 }}</td>
               <td class="cell-actions">
+                <button class="btn btn-sm" type="button" :disabled="togglingId === user.id" @click.stop="toggleTest(user)">
+                  <AppIcon name="flag" :size="13" /> {{ user.is_test ? '取消测试' : '标记测试' }}
+                </button>
                 <button class="btn btn-danger btn-sm" type="button" @click.stop="askDelete(user)">
                   <AppIcon name="trash" :size="14" /> 删除
                 </button>
@@ -59,7 +74,7 @@
             </tr>
           </tbody>
           <tbody v-else>
-            <tr><td colspan="6"><div class="empty-state"><strong>没有匹配的用户</strong>换个关键词试试</div></td></tr>
+            <tr><td colspan="9"><div class="empty-state"><strong>没有匹配的用户</strong>换个关键词试试</div></td></tr>
           </tbody>
         </table>
       </div>
@@ -116,6 +131,7 @@ const loading = ref(false)
 const error = ref('')
 const deleteTarget = ref(null)
 const deleting = ref(false)
+const togglingId = ref(null)
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
 const pageNumbers = computed(() => {
@@ -165,6 +181,19 @@ function goPage(next) {
 function askDelete(user) {
   deleteTarget.value = user
 }
+async function toggleTest(user) {
+  togglingId.value = user.id
+  try {
+    await api.patch(`/users/${user.id}`, { isTest: !user.is_test })
+    user.is_test = !user.is_test
+    toast(user.is_test ? '已标记为测试用户' : '已取消测试标记', 'success')
+  } catch (err) {
+    toast(err.message || '操作失败', 'error')
+  } finally {
+    togglingId.value = null
+  }
+}
+
 async function confirmDelete() {
   const target = deleteTarget.value
   if (!target) return
@@ -236,4 +265,7 @@ onMounted(load)
   font-size: 12.5px;
 }
 .cell-actions { white-space: nowrap; }
+.inviter-link { color: var(--color-primary); font-weight: 500; text-decoration: none; }
+.inviter-link:hover { text-decoration: underline; }
+.badge-warning { background: rgba(245, 158, 11, 0.14); color: #b45309; }
 </style>

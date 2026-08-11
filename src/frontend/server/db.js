@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Pool } from 'pg';
 
 const schema = `
@@ -46,6 +47,10 @@ ALTER TABLE app_users ADD COLUMN IF NOT EXISTS avatar_path text;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS avatar_mime text;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS avatar_updated_at timestamptz;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS announcement_ack_at timestamptz;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_test boolean NOT NULL DEFAULT false;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS invite_code text;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS invited_by uuid;
+CREATE INDEX IF NOT EXISTS app_users_invited_by_idx ON app_users(invited_by);
 CREATE TABLE IF NOT EXISTS app_reports (
   id uuid PRIMARY KEY,
   access_token text NOT NULL UNIQUE,
@@ -219,12 +224,39 @@ const mapJob = row => row && ({
 });
 
 
+
+// 邀请码回填：为历史用户补齐唯一邀请码（幂等，重复调用安全）
+function randomInviteCode() {
+  return crypto.randomBytes(5).toString('base64url').replace(/[-_]/g, '').toUpperCase().slice(0, 8);
+}
+async function backfillInviteCodes(pool) {
+  try {
+    const missing = await pool.query("SELECT id FROM app_users WHERE invite_code IS NULL OR invite_code = ''");
+    for (const row of missing.rows) {
+      let code = null;
+      for (let i = 0; i < 5; i++) {
+        const candidate = randomInviteCode();
+        const clash = await pool.query('SELECT 1 FROM app_users WHERE invite_code = $1', [candidate]);
+        if (clash.rowCount === 0) { code = candidate; break; }
+      }
+      if (!code) code = 'U' + String(row.id).replace(/-/g, '').slice(0, 8).toUpperCase();
+      await pool.query("UPDATE app_users SET invite_code = $1 WHERE id = $2", [code, row.id]);
+    }
+    if (missing.rows.length) console.log('已为 ' + missing.rows.length + ' 个历史用户补齐邀请码');
+  } catch (error) {
+    console.error('回填邀请码失败：', error.message);
+  }
+}
+
 export function createPgStore() {
   const connectionString = selectedUrl() || process.env.DATABASE_URL;
   if (!connectionString) throw new Error('DATABASE_URL_LOCAL 或 DATABASE_URL_SERVER 未配置。');
   const pool = new Pool({ connectionString, max: 10, idleTimeoutMillis: 30000 });
   return {
-    async init() { await pool.query(schema); },
+    async init() {
+      await pool.query(schema);
+      await backfillInviteCodes(pool);
+    },
     async close() { await pool.end(); },
     async readDb() {
       const client = await pool.connect();
@@ -233,7 +265,7 @@ export function createPgStore() {
         const sessions = await client.query('SELECT token, user_id, expires_at FROM app_sessions');
         const reports = await client.query('SELECT * FROM app_reports ORDER BY created_at');
         return {
-          users: users.rows.map(row => ({ id: row.id, email: row.email, passwordHash: row.password_hash, emailVerifiedAt: row.email_verified_at?.toISOString() || null, resumeText: row.resume_text || '', resumeUpdatedAt: row.resume_updated_at?.toISOString() || null, resumeFileName: row.resume_file_name || null, resumeFileMime: row.resume_file_mime || null, resumeFileSize: row.resume_file_size == null ? null : Number(row.resume_file_size), resumeFilePath: row.resume_file_path || null, resumeFileUploadedAt: row.resume_file_uploaded_at?.toISOString() || null, resumeStructured: row.resume_structured || null, resumeStructuredUsage: row.resume_structured_usage || null, resumeStructuredAt: row.resume_structured_at?.toISOString() || null, resumeMaskedFields: row.resume_masked_fields || null, resumeBasic: row.resume_basic || null, preferredTemplateId: row.preferred_template_id || null, avatarPath: row.avatar_path || null, avatarMime: row.avatar_mime || null, avatarUpdatedAt: row.avatar_updated_at?.toISOString() || null, factsConfirmedAt: row.facts_confirmed_at?.toISOString() || null, announcementAckAt: row.announcement_ack_at?.toISOString() || null, createdAt: row.created_at.toISOString(), emailVerificationTokenHash: row.email_verification_token_hash, emailVerificationExpiresAt: row.email_verification_expires_at?.toISOString() || null, verificationSentAt: row.verification_sent_at?.toISOString() || null, verificationMessageId: row.verification_message_id, verificationEmailStatus: row.verification_email_status, verificationEmailError: row.verification_email_error })),
+          users: users.rows.map(row => ({ id: row.id, email: row.email, passwordHash: row.password_hash, emailVerifiedAt: row.email_verified_at?.toISOString() || null, resumeText: row.resume_text || '', resumeUpdatedAt: row.resume_updated_at?.toISOString() || null, resumeFileName: row.resume_file_name || null, resumeFileMime: row.resume_file_mime || null, resumeFileSize: row.resume_file_size == null ? null : Number(row.resume_file_size), resumeFilePath: row.resume_file_path || null, resumeFileUploadedAt: row.resume_file_uploaded_at?.toISOString() || null, resumeStructured: row.resume_structured || null, resumeStructuredUsage: row.resume_structured_usage || null, resumeStructuredAt: row.resume_structured_at?.toISOString() || null, resumeMaskedFields: row.resume_masked_fields || null, resumeBasic: row.resume_basic || null, preferredTemplateId: row.preferred_template_id || null, avatarPath: row.avatar_path || null, avatarMime: row.avatar_mime || null, avatarUpdatedAt: row.avatar_updated_at?.toISOString() || null, isTest: Boolean(row.is_test), inviteCode: row.invite_code || null, invitedBy: row.invited_by || null, factsConfirmedAt: row.facts_confirmed_at?.toISOString() || null, announcementAckAt: row.announcement_ack_at?.toISOString() || null, createdAt: row.created_at.toISOString(), emailVerificationTokenHash: row.email_verification_token_hash, emailVerificationExpiresAt: row.email_verification_expires_at?.toISOString() || null, verificationSentAt: row.verification_sent_at?.toISOString() || null, verificationMessageId: row.verification_message_id, verificationEmailStatus: row.verification_email_status, verificationEmailError: row.verification_email_error })),
           sessions: sessions.rows.map(row => ({ token: row.token, userId: row.user_id, expiresAt: row.expires_at.toISOString() })),
           reports: reports.rows.map(row => ({ id: row.id, accessToken: row.access_token, userId: row.user_id, email: row.email, companyShortName: row.company_short_name, jobTitle: row.job_title, reportName: row.report_name, status: row.status, emailStatus: row.email_status, report: row.report, usage: row.usage, costUsd: row.cost_usd == null ? null : Number(row.cost_usd), costSource: row.cost_source || null, jobText: row.job_text || null, emailSentTimes: Array.isArray(row.email_sent_times) ? row.email_sent_times : [], deletedAt: row.deleted_at?.toISOString() || null, reanalyzedAt: row.reanalyzed_at?.toISOString() || null, createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString() }))
         };
@@ -243,7 +275,7 @@ export function createPgStore() {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
-        for (const user of db.users || []) await client.query(`INSERT INTO app_users (id,email,password_hash,email_verified_at,resume_text,resume_updated_at,resume_file_name,resume_file_mime,resume_file_size,resume_file_path,resume_file_uploaded_at,resume_structured,resume_structured_usage,resume_structured_at,created_at,email_verification_token_hash,email_verification_expires_at,verification_sent_at,verification_message_id,verification_email_status,verification_email_error,resume_masked_fields,facts_confirmed_at,announcement_ack_at,resume_basic,preferred_template_id,avatar_path,avatar_mime,avatar_updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29) ON CONFLICT (id) DO UPDATE SET email=$2,password_hash=$3,email_verified_at=$4,resume_text=$5,resume_updated_at=$6,resume_file_name=$7,resume_file_mime=$8,resume_file_size=$9,resume_file_path=$10,resume_file_uploaded_at=$11,resume_structured=$12,resume_structured_usage=$13,resume_structured_at=$14,email_verification_token_hash=$16,email_verification_expires_at=$17,verification_sent_at=$18,verification_message_id=$19,verification_email_status=$20,verification_email_error=$21,resume_masked_fields=$22,facts_confirmed_at=$23,announcement_ack_at=$24,resume_basic=$25,preferred_template_id=$26,avatar_path=$27,avatar_mime=$28,avatar_updated_at=$29`, [user.id,user.email,user.passwordHash,user.emailVerifiedAt||null,user.resumeText||null,user.resumeUpdatedAt||null,user.resumeFileName||null,user.resumeFileMime||null,user.resumeFileSize==null?null:user.resumeFileSize,user.resumeFilePath||null,user.resumeFileUploadedAt||null,user.resumeStructured?JSON.stringify(user.resumeStructured):null,user.resumeStructuredUsage?JSON.stringify(user.resumeStructuredUsage):null,user.resumeStructuredAt||null,user.createdAt,user.emailVerificationTokenHash||null,user.emailVerificationExpiresAt||null,user.verificationSentAt||null,user.verificationMessageId||null,user.verificationEmailStatus||null,user.verificationEmailError||null,user.resumeMaskedFields?JSON.stringify(user.resumeMaskedFields):null,user.factsConfirmedAt||null,user.announcementAckAt||null,user.resumeBasic?JSON.stringify(user.resumeBasic):null,user.preferredTemplateId||null,user.avatarPath||null,user.avatarMime||null,user.avatarUpdatedAt||null]);
+        for (const user of db.users || []) await client.query(`INSERT INTO app_users (id,email,password_hash,email_verified_at,resume_text,resume_updated_at,resume_file_name,resume_file_mime,resume_file_size,resume_file_path,resume_file_uploaded_at,resume_structured,resume_structured_usage,resume_structured_at,created_at,email_verification_token_hash,email_verification_expires_at,verification_sent_at,verification_message_id,verification_email_status,verification_email_error,resume_masked_fields,facts_confirmed_at,announcement_ack_at,resume_basic,preferred_template_id,avatar_path,avatar_mime,avatar_updated_at,is_test,invite_code,invited_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32) ON CONFLICT (id) DO UPDATE SET email=$2,password_hash=$3,email_verified_at=$4,resume_text=$5,resume_updated_at=$6,resume_file_name=$7,resume_file_mime=$8,resume_file_size=$9,resume_file_path=$10,resume_file_uploaded_at=$11,resume_structured=$12,resume_structured_usage=$13,resume_structured_at=$14,email_verification_token_hash=$16,email_verification_expires_at=$17,verification_sent_at=$18,verification_message_id=$19,verification_email_status=$20,verification_email_error=$21,resume_masked_fields=$22,facts_confirmed_at=$23,announcement_ack_at=$24,resume_basic=$25,preferred_template_id=$26,avatar_path=$27,avatar_mime=$28,avatar_updated_at=$29,is_test=$30,invite_code=$31,invited_by=$32`, [user.id,user.email,user.passwordHash,user.emailVerifiedAt||null,user.resumeText||null,user.resumeUpdatedAt||null,user.resumeFileName||null,user.resumeFileMime||null,user.resumeFileSize==null?null:user.resumeFileSize,user.resumeFilePath||null,user.resumeFileUploadedAt||null,user.resumeStructured?JSON.stringify(user.resumeStructured):null,user.resumeStructuredUsage?JSON.stringify(user.resumeStructuredUsage):null,user.resumeStructuredAt||null,user.createdAt,user.emailVerificationTokenHash||null,user.emailVerificationExpiresAt||null,user.verificationSentAt||null,user.verificationMessageId||null,user.verificationEmailStatus||null,user.verificationEmailError||null,user.resumeMaskedFields?JSON.stringify(user.resumeMaskedFields):null,user.factsConfirmedAt||null,user.announcementAckAt||null,user.resumeBasic?JSON.stringify(user.resumeBasic):null,user.preferredTemplateId||null,user.avatarPath||null,user.avatarMime||null,user.avatarUpdatedAt||null,user.isTest?true:false,user.inviteCode||null,user.invitedBy||null]);
         await client.query('DELETE FROM app_sessions');
         for (const session of db.sessions || []) await client.query('INSERT INTO app_sessions (token,user_id,expires_at) VALUES ($1,$2,$3)', [session.token,session.userId,session.expiresAt]);
         for (const report of db.reports || []) await client.query(`INSERT INTO app_reports (id,access_token,user_id,email,company_short_name,job_title,job_text,report_name,status,email_status,report,usage,cost_usd,cost_source,created_at,updated_at,email_sent_times,deleted_at,reanalyzed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT (id) DO UPDATE SET access_token=$2,user_id=$3,email=$4,company_short_name=$5,job_title=$6,job_text=$7,email_status=$10,updated_at=$16,report=$11,report_name=$8,usage=$12,cost_usd=$13,cost_source=$14,email_sent_times=$17,deleted_at=$18,reanalyzed_at=$19`, [report.id,report.accessToken,report.userId||null,report.email||null,report.companyShortName||null,report.jobTitle||null,report.jobText||null,report.reportName||null,report.status||'completed',report.emailStatus||'unknown',JSON.stringify(report.report||{}),report.usage?JSON.stringify(report.usage):null,report.costUsd==null?null:report.costUsd,report.costSource||null,report.createdAt,report.updatedAt,JSON.stringify(Array.isArray(report.emailSentTimes)?report.emailSentTimes:[]),report.deletedAt||null,report.reanalyzedAt||null]);

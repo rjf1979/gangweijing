@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <header class="site-header">
     <div class="header-inner">
       <router-link class="brand" to="/" aria-label="岗位镜首页">
@@ -10,18 +10,22 @@
         <router-link to="/my-resume">我的简历</router-link>
         <button type="button" class="header-link" @click="openJobAnalysis">岗位分析</button>
         <router-link to="/reports">我的报告</router-link>
+        <button id="invite-btn" type="button" class="header-link" @click="inviteDialog.open()">邀请好友</button>
         <button id="logout-btn" type="button" class="header-link" @click="doLogout">退出登录</button>
       </nav>
     </div>
+    <InviteDialog ref="inviteDialog" />
   </header>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { store, clearJobDraft, logout, showLoading, hideLoading } from '../store'
+import InviteDialog from './InviteDialog.vue'
 
 const router = useRouter()
+const inviteDialog = ref(null)
 
 // 退出登录：清理会话与本地草稿后回到登录页
 async function doLogout() {

@@ -355,6 +355,7 @@ app.get('/api/admin/users/:id', requireAdmin, async (req, res) => {
   const user = await store.getUserById(req.params.id);
   if (!user) return res.status(404).json({ error: '用户不存在。' });
   const reports = await store.getUserReports(user.id);
+  const inviteInfo = await store.getUserInviteInfo(user.id).catch(() => null);
   res.json({
     user: {
       id: user.id, email: user.email, emailVerifiedAt: iso(user.email_verified_at),
@@ -363,6 +364,10 @@ app.get('/api/admin/users/:id', requireAdmin, async (req, res) => {
       resumeFile: publicResumeFile(user),
       resumeStructured: user.resume_structured || null,
       verificationEmailStatus: user.verification_email_status || 'none',
+      isTest: Boolean(user.is_test),
+      inviteCode: user.invite_code || null,
+      invitedByEmail: (inviteInfo && inviteInfo.invited_by_email) || null,
+      inviteCount: (inviteInfo && inviteInfo.invite_count) || 0,
     },
     reports: reports.map(r => ({
       id: r.id, companyShortName: r.company_short_name, jobTitle: r.job_title,
@@ -378,6 +383,15 @@ app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
   await removeUserResumeDir(user);
   await store.deleteUser(user.id);
   res.json({ ok: true, deleted: user.id });
+});
+
+// 标记/取消标记测试用户（管理员）
+app.patch('/api/admin/users/:id', express.json(), requireAdmin, async (req, res) => {
+  const user = await store.getUserById(req.params.id);
+  if (!user) return res.status(404).json({ error: '用户不存在。' });
+  if (typeof req.body?.isTest !== 'boolean') return res.status(400).json({ error: '缺少 isTest 参数。' });
+  await store.setUserTest(user.id, req.body.isTest);
+  res.json({ ok: true, id: user.id, isTest: req.body.isTest });
 });
 
 // ===== 用户原始简历文件管理 =====

@@ -23,6 +23,10 @@ ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_file_path text;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_file_uploaded_at timestamptz;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS resume_masked_fields jsonb;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS facts_confirmed_at timestamptz;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_test boolean NOT NULL DEFAULT false;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS invite_code text;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS invited_by uuid;
+CREATE INDEX IF NOT EXISTS app_users_invited_by_idx ON app_users(invited_by);
 ALTER TABLE app_reports ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 CREATE TABLE IF NOT EXISTS admin_settings (
   id integer PRIMARY KEY DEFAULT 1,
@@ -528,16 +532,35 @@ export function createPgStore() {
 
     // ===== 用户管理 =====
     async searchUsers(q, { limit, offset }) {
-      const where = q ? 'WHERE email ILIKE $1' : '';
+      const where = q ? 'WHERE u.email ILIKE $1' : '';
       const params = q ? [`%${q}%`] : [];
       const { rows } = await pool.query(
-        `SELECT id, email, email_verified_at, created_at,
-           (resume_text IS NOT NULL AND resume_text <> '') AS has_resume
-         FROM ${userTable} ${where}
-         ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`,
+        `SELECT u.id, u.email, u.email_verified_at, u.created_at, u.is_test, u.invite_code, u.invited_by,
+           (u.resume_text IS NOT NULL AND u.resume_text <> '') AS has_resume,
+           inv.email AS invited_by_email,
+           (SELECT count(*)::int FROM ${userTable} i WHERE i.invited_by = u.id) AS invite_count
+         FROM ${userTable} u
+         LEFT JOIN ${userTable} inv ON inv.id = u.invited_by
+         ${where}
+         ORDER BY u.created_at DESC LIMIT ${limit} OFFSET ${offset}`,
         params
       );
       return rows;
+    },
+    async setUserTest(id, isTest) {
+      await pool.query('UPDATE ' + userTable + ' SET is_test = $1 WHERE id = $2', [Boolean(isTest), id]);
+    },
+    async getUserInviteInfo(id) {
+      const { rows } = await pool.query(
+        `SELECT u.invite_code, u.invited_by, u.is_test,
+           inv.email AS invited_by_email,
+           (SELECT count(*)::int FROM ${userTable} i WHERE i.invited_by = u.id) AS invite_count
+         FROM ${userTable} u
+         LEFT JOIN ${userTable} inv ON inv.id = u.invited_by
+         WHERE u.id = $1`,
+        [id]
+      );
+      return rows[0] || null;
     },
     async countSearchUsers(q) {
       const where = q ? 'WHERE email ILIKE $1' : '';
