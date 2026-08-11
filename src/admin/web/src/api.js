@@ -1,4 +1,4 @@
-﻿import { store, setSession, clearSession } from './store'
+import { store, setSession, clearSession } from './store'
 
 const API_BASE = '/api/admin'
 
@@ -149,6 +149,34 @@ export const api = {
   },
   async clearGenerateJobs() {
     return request('/resume-templates/generate-jobs/clear-history', { method: 'POST' })
+  },
+  // ===== 统一任务列表（任务列表页：AI 模板生成 / 报告生成 / 简历解析 / 截图识别 / 简历结构化）=====
+  async listJobs(params = {}) {
+    const qs = new URLSearchParams()
+    if (params.type) qs.set('type', params.type)
+    if (params.status) qs.set('status', params.status)
+    if (params.q) qs.set('q', params.q)
+    if (params.limit) qs.set('limit', String(params.limit))
+    if (params.offset) qs.set('offset', String(params.offset))
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return request(`/jobs${suffix}`)
+  },
+  async jobsStats() {
+    const data = await request('/jobs/stats')
+    return data.stats || {}
+  },
+  async getJob(jobId) {
+    const data = await request(`/jobs/${jobId}`)
+    return data.job
+  },
+  async cancelJob(jobId) {
+    return request(`/jobs/${jobId}/cancel`, { method: 'POST' })
+  },
+  async retryJob(jobId) {
+    return request(`/jobs/${jobId}/retry`, { method: 'POST' })
+  },
+  async clearJobs() {
+    return request('/jobs/clear-history', { method: 'POST' })
   },
   async setDefaultResumeTemplate(id) {
     return request(`/resume-templates/${id}/set-default`, { method: 'POST' })

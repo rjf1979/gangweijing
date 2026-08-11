@@ -25,6 +25,11 @@ await fs.mkdir(avatarDir, { recursive: true });
 try { await fs.access(dbPath); } catch { await fs.writeFile(dbPath, JSON.stringify({ users: [], reports: [] })); }
 const dbStore = createPgStore();
 await dbStore.init();
+// 启动恢复：重启前 pending/running 的报告生成任务标记为失败（任务状态同步到统一任务列表）
+try {
+  const interrupted = await dbStore.markInterruptedJobs({ taskType: 'report_generate' });
+  if (interrupted) console.log(`已标记 ${interrupted} 个重启前未完成的报告生成任务为失败`);
+} catch (error) { console.error('标记中断任务失败：', error.message); }
 const readDb = () => dbStore.readDb();
 const saveDb = db => dbStore.saveDb(db);
 // 后台配置（admin_settings 数据库）：邮件配置优先于环境变量兜底，保存后立即生效；AI 凭证由 ai_keys / ai_models 提供
@@ -65,35 +70,45 @@ function syncAnalysisWorkers() {
   }
 }
 async function processAnalysisTask(task) {
-  const db = await readDb();
-  const record = db.reports.find(item => item.id === task.reportId);
-  if (!record || record.deletedAt) return; // 已删除，忽略
-  const user = db.users.find(item => item.id === task.userId);
-  if (!user || !user.resumeText) {
-    await dbStore.updateReportFields(record.id, { status: 'failed', emailStatus: 'unknown', updatedAt: new Date().toISOString() });
-    return;
+  // 任务状态同步到统一任务列表（管理后台「任务列表」页）
+  const syncJob = patch => dbStore.updateJob(task.reportId, patch).catch(error => console.error('同步报告生成任务失败：', error.message));
+  await syncJob({ status: 'running', startedAt: new Date(), error: null });
+  try {
+    const db = await readDb();
+    const record = db.reports.find(item => item.id === task.reportId);
+    if (!record || record.deletedAt) return; // 已删除，忽略
+    const user = db.users.find(item => item.id === task.userId);
+    if (!user || !user.resumeText) {
+      await dbStore.updateReportFields(record.id, { status: 'failed', emailStatus: 'unknown', updatedAt: new Date().toISOString() });
+      await syncJob({ status: 'error', error: '用户简历缺失，无法生成报告', finishedAt: new Date() });
+      return;
+    }
+    const { record: result } = await generateReport({
+      user: { id: user.id, email: user.email, resumeText: user.resumeText, resumeStructured: user.resumeStructured },
+      resumeText: task.resumeText || user.resumeText,
+      jobText: task.jobText,
+      jobTitle: task.jobTitle,
+      companyShortName: task.companyShortName,
+      baseRecord: record,
+    });
+    await dbStore.updateReportFields(record.id, {
+      status: 'completed',
+      reportName: result.reportName,
+      companyShortName: result.companyShortName,
+      jobTitle: result.jobTitle,
+      report: result.report,
+      emailStatus: result.emailStatus,
+      emailSentTimes: result.emailSentTimes || [],
+      usage: result.usage || null,
+      costUsd: result.costUsd,
+      costSource: result.costSource || null,
+      updatedAt: result.updatedAt,
+    });
+    await syncJob({ status: 'done', result: { reportId: record.id, reportName: result.reportName, companyShortName: result.companyShortName, jobTitle: result.jobTitle }, finishedAt: new Date() });
+  } catch (error) {
+    await syncJob({ status: 'error', error: error.message || String(error), finishedAt: new Date() });
+    throw error;
   }
-  const { record: result } = await generateReport({
-    user: { id: user.id, email: user.email, resumeText: user.resumeText, resumeStructured: user.resumeStructured },
-    resumeText: task.resumeText || user.resumeText,
-    jobText: task.jobText,
-    jobTitle: task.jobTitle,
-    companyShortName: task.companyShortName,
-    baseRecord: record,
-  });
-  await dbStore.updateReportFields(record.id, {
-    status: 'completed',
-    reportName: result.reportName,
-    companyShortName: result.companyShortName,
-    jobTitle: result.jobTitle,
-    report: result.report,
-    emailStatus: result.emailStatus,
-    emailSentTimes: result.emailSentTimes || [],
-    usage: result.usage || null,
-    costUsd: result.costUsd,
-    costSource: result.costSource || null,
-    updatedAt: result.updatedAt,
-  });
 }
 async function recoverStaleAnalyzing() {
   try {
@@ -533,6 +548,11 @@ app.put('/api/resume', async (req, res) => {
     if (oldPath && oldPath !== target) await fs.rm(oldPath, { force: true }).catch(() => {});
   }
   if (resumeTextChanged || !user.resumeStructured) {
+    // 任务状态同步到统一任务列表（简历结构化：AI 拆解或 OCR 结果落库）
+    const structureJobId = 'rs-' + crypto.randomBytes(6).toString('hex');
+    try {
+      await dbStore.insertJob({ id: structureJobId, taskType: 'resume_structure', title: `简历结构化：${user.email || user.id}`, subtitle: '拆解简历基础信息与版式字段', status: 'running', startedAt: new Date(), refType: 'user', refId: user.id, owner: 'user' });
+    } catch (error) { console.error('写入简历结构化任务失败：', error.message); }
     try {
       let result;
       const hasShape = providedStructured && (providedStructured.basic || providedStructured.education || providedStructured.work_experience || providedStructured.skills);
@@ -547,9 +567,11 @@ app.put('/api/resume', async (req, res) => {
       user.resumeStructured = maskStructuredPII(withOcc);
       user.resumeStructuredUsage = result.usage || null;
       user.resumeStructuredAt = new Date().toISOString();
+      await dbStore.updateJob(structureJobId, { status: 'done', result: { structured: true }, finishedAt: new Date() }).catch(error => console.error('同步简历结构化任务失败：', error.message));
     } catch (error) {
       if (resumeTextChanged) { user.resumeStructured = null; user.resumeStructuredUsage = null; user.resumeStructuredAt = null; }
       structuredError = error.message;
+      await dbStore.updateJob(structureJobId, { status: 'error', error: error.message || String(error), finishedAt: new Date() }).catch(error2 => console.error('同步简历结构化任务失败：', error2.message));
     }
   }
   // 基础信息拆解为独立字段保存（姓名/性别/出生年月/电话/邮箱/所在地等），前端编辑页与模板渲染按字段读取
@@ -634,6 +656,17 @@ app.post('/api/extract/resume', upload.single('resume'), async (req, res) => {
   const fileRef = crypto.randomUUID();
   const stagingPath = path.join(resumeStagingDir, fileRef);
   let staged = false;
+  // 任务状态同步到统一任务列表（简历解析：本地版式 / AI OCR / 文本提取）
+  const jobId = 'rp-' + crypto.randomBytes(6).toString('hex');
+  const trackJob = async (status, payload = {}) => {
+    try {
+      if (status === 'done') await dbStore.updateJob(jobId, { status, result: { fileRef, mode: payload.mode || null }, finishedAt: new Date() });
+      else if (status === 'error') await dbStore.updateJob(jobId, { status, error: payload.error || '简历解析失败', finishedAt: new Date() });
+    } catch (error) { console.error('同步简历解析任务失败：', error.message); }
+  };
+  try {
+    await dbStore.insertJob({ id: jobId, taskType: 'resume_parse', title: `简历解析：${normalizeResumeFileName(file.originalname) || '简历文件'}`, subtitle: '解析上传的简历文件（本地版式 / AI OCR / 文本提取）', status: 'running', startedAt: new Date(), refType: 'resume-file', refId: fileRef, owner: 'user' });
+  } catch (error) { console.error('写入简历解析任务失败：', error.message); }
   try {
     const mimetype = String(file.mimetype || '').toLowerCase();
     // 保留原始文件到暂存区，等保存简历时归档到用户目录（原始文件名仅存库，磁盘用 UUID 命名）
@@ -644,11 +677,13 @@ app.post('/api/extract/resume', upload.single('resume'), async (req, res) => {
     if (mimetype === 'application/pdf') {
       const layout = await analyzePdf(stagingPath);
       if (layout?.structured) {
+        await trackJob('done', { mode: 'layout' });
         return res.json({ text: layout.text, structured: layout.structured, fileRef, mode: 'layout', usage: null, costUsd: null, costSource: null, model: null, warnings: layout.structured.warnings || [] });
       }
     } else if (mimetype.includes('wordprocessingml')) {
       const layout = await analyzeDocx(stagingPath);
       if (layout?.structured) {
+        await trackJob('done', { mode: 'layout' });
         return res.json({ text: layout.text, structured: layout.structured, fileRef, mode: 'layout', usage: null, costUsd: null, costSource: null, model: null, warnings: layout.structured.warnings || [] });
       }
     }
@@ -657,22 +692,42 @@ app.post('/api/extract/resume', upload.single('resume'), async (req, res) => {
     if (isOcrCandidate) {
       try {
         const ocr = await ocrResume(stagingPath, mimetype);
+        await trackJob('done', { mode: 'ocr' });
         return res.json({ text: ocr.text, structured: ocr.structured || undefined, fileRef, mode: 'ocr', usage: ocr.usage || null, costUsd: ocr.cost?.value ?? null, costSource: ocr.cost?.source ?? null, model: ocr.model, warnings: ocr.warnings || [] });
       } catch (error) {
-        if (mimetype.startsWith('image/')) { await fs.unlink(stagingPath).catch(() => {}); await fs.unlink(stagingPath + '.meta.json').catch(() => {}); return res.status(502).json({ error: `AI OCR 识别简历失败：${error.message}` }); }
+        if (mimetype.startsWith('image/')) {
+          await trackJob('error', { error: `AI OCR 识别简历失败：${error.message}` });
+          await fs.unlink(stagingPath).catch(() => {}); await fs.unlink(stagingPath + '.meta.json').catch(() => {});
+          return res.status(502).json({ error: `AI OCR 识别简历失败：${error.message}` });
+        }
         // PDF OCR 失败：回退文本提取
       }
     }
     const text = await extractResume({ mimetype, path: stagingPath });
     if (!String(text || '').trim()) throw new Error('未能从文件中提取到文本，请确认文件未加密或尝试上传清晰的 PDF/图片。');
+    await trackJob('done', { mode: 'text' });
     res.json({ text, fileRef, mode: 'text' });
   } catch (error) {
+    await trackJob('error', { error: error.message });
     if (staged) { await fs.unlink(stagingPath).catch(() => {}); await fs.unlink(stagingPath + '.meta.json').catch(() => {}); }
     else await fs.unlink(file.path).catch(() => {});
     res.status(400).json({ error: error.message });
   }
 });
-app.post('/api/extract/screenshot', upload.single('screenshot'), async (req, res) => { try { if (!req.file?.mimetype.startsWith('image/')) return res.status(400).json({ error: '请上传有效的岗位截图。' }); await refreshAppConfig(); const activeOcr = await resolveAiModel('ocr'); const credential = await resolveAiCredential(activeOcr); if (!credential.apiKey) return res.status(503).json({ error: '尚未配置 AI 接口。' }); const image = `data:${req.file.mimetype};base64,${(await fs.readFile(req.file.path)).toString('base64')}`; const prompt = '识别这张招聘岗位截图。完整保留职责、要求、薪资、地点、公司和岗位名称，不要补充图片中不存在的信息。输出严格 JSON：{"company_short_name":"","job_title":"","text":"","warnings":[]}。公司简称应去掉有限公司等工商后缀；无法确认的内容留空并放入 warnings。';
+
+app.post('/api/extract/screenshot', upload.single('screenshot'), async (req, res) => {
+  // 任务状态同步到统一任务列表（截图识别）
+  const jobId = 'so-' + crypto.randomBytes(6).toString('hex');
+  const trackJob = async (status, payload = {}) => {
+    try {
+      if (status === 'done') await dbStore.updateJob(jobId, { status, result: { companyShortName: payload.companyShortName || '', jobTitle: payload.jobTitle || '' }, finishedAt: new Date() });
+      else if (status === 'error') await dbStore.updateJob(jobId, { status, error: payload.error || '截图识别失败', finishedAt: new Date() });
+    } catch (error) { console.error('同步截图识别任务失败：', error.message); }
+  };
+  try {
+    await dbStore.insertJob({ id: jobId, taskType: 'screenshot_ocr', title: '岗位截图识别', subtitle: '识别招聘岗位截图中的公司、岗位与职责要求', status: 'running', startedAt: new Date(), refType: 'screenshot', refId: jobId, owner: 'user' });
+  } catch (error) { console.error('写入截图识别任务失败：', error.message); }
+  try { if (!req.file?.mimetype.startsWith('image/')) { await trackJob('error', { error: '请上传有效的岗位截图。' }); return res.status(400).json({ error: '请上传有效的岗位截图。' }); } await refreshAppConfig(); const activeOcr = await resolveAiModel('ocr'); const credential = await resolveAiCredential(activeOcr); if (!credential.apiKey) { await trackJob('error', { error: '尚未配置 AI 接口。' }); return res.status(503).json({ error: '尚未配置 AI 接口。' }); } const image = `data:${req.file.mimetype};base64,${(await fs.readFile(req.file.path)).toString('base64')}`; const prompt = '识别这张招聘岗位截图。完整保留职责、要求、薪资、地点、公司和岗位名称，不要补充图片中不存在的信息。输出严格 JSON：{"company_short_name":"","job_title":"","text":"","warnings":[]}。公司简称应去掉有限公司等工商后缀；无法确认的内容留空并放入 warnings。';
     const ocrOpts = credential.apiKey ? { apiKey: credential.apiKey, ...(credential.baseUrl ? { baseUrl: credential.baseUrl } : {}) } : {};
     let payload;
     if (activeOcr?.apiProtocol === 'responses') {
@@ -682,7 +737,7 @@ app.post('/api/extract/screenshot', upload.single('screenshot'), async (req, res
     } else {
       payload = await callResponses({ model: process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: image }] }], text: { format: { type: 'json_object' } } }, ocrOpts);
     }
-    const result = parseJsonText(extractText(payload)); const ocrModel = activeOcr?.modelId || process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL; const ocrUsage = extractUsage(payload, ocrModel); const ocrCost = await computeReportCost(ocrUsage); res.json({ text: result.text || '', companyShortName: result.company_short_name || '', jobTitle: result.job_title || '', warnings: result.warnings || [], usage: ocrUsage ? { ...ocrUsage, costSource: ocrCost.source, currency: ocrCost.currency } : null, costUsd: ocrCost.value, costSource: ocrCost.source }); } catch (error) { res.status(502).json({ error: `AI 截图识别失败：${error.message}` }); } finally { if (req.file?.path) await fs.unlink(req.file.path).catch(() => {}); } });
+    const result = parseJsonText(extractText(payload)); const ocrModel = activeOcr?.modelId || process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL; const ocrUsage = extractUsage(payload, ocrModel); const ocrCost = await computeReportCost(ocrUsage); await trackJob('done', { companyShortName: result.company_short_name || '', jobTitle: result.job_title || '' }); res.json({ text: result.text || '', companyShortName: result.company_short_name || '', jobTitle: result.job_title || '', warnings: result.warnings || [], usage: ocrUsage ? { ...ocrUsage, costSource: ocrCost.source, currency: ocrCost.currency } : null, costUsd: ocrCost.value, costSource: ocrCost.source }); } catch (error) { await trackJob('error', { error: `AI 截图识别失败：${error.message}` }); res.status(502).json({ error: `AI 截图识别失败：${error.message}` }); } finally { if (req.file?.path) await fs.unlink(req.file.path).catch(() => {}); } });
 // 生成分析报告（供首次分析与重新分析复用）：构建报告记录 + 发送结果邮件
 async function generateReport({ user, resumeText, jobText, jobTitle, companyShortName, baseRecord }) {
   await refreshAppConfig();
@@ -778,6 +833,15 @@ app.post('/api/analyze', async (req, res) => {
   await saveDb(db);
   analysisQueue.push({ reportId: record.id, userId: user.id, resumeText, jobText, jobTitle: jobTitle || '', companyShortName: companyShortName || '' });
   syncAnalysisWorkers();
+  // 任务状态同步到统一任务列表
+  try {
+    await dbStore.insertJob({
+      id: record.id, taskType: 'report_generate',
+      title: record.reportName,
+      subtitle: `${user.email || user.id} · ${record.companyShortName || record.jobTitle || '岗位分析'}`,
+      status: 'pending', refType: 'report', refId: record.id, owner: 'user',
+    });
+  } catch (error) { console.error('写入报告生成任务失败：', error.message); }
   res.json({ id: record.id, reportName: record.reportName, reportUrl: `${publicAppUrl()}/report/${accessToken}`, status: 'analyzing', queued: true });
 });
 
@@ -810,6 +874,15 @@ app.post('/api/reports/:id/reanalyze', async (req, res) => {
   await saveDb(db);
   analysisQueue.push({ reportId: created.id, userId: user.id, resumeText: user.resumeText, jobText: record.jobText, jobTitle: record.jobTitle || '', companyShortName: record.companyShortName || '' });
   syncAnalysisWorkers();
+  // 任务状态同步到统一任务列表
+  try {
+    await dbStore.insertJob({
+      id: created.id, taskType: 'report_generate',
+      title: created.reportName,
+      subtitle: `${user.email || user.id} · ${created.companyShortName || created.jobTitle || '重新分析'}`,
+      status: 'pending', refType: 'report', refId: created.id, owner: 'user',
+    });
+  } catch (error) { console.error('写入报告生成任务失败：', error.message); }
   res.json({ id: created.id, reportName: created.reportName, reportUrl: `${publicAppUrl()}/report/${accessToken}`, status: 'analyzing', queued: true });
 });
 

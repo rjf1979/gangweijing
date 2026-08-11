@@ -3,11 +3,11 @@
     <!-- 页头 -->
     <div class="tq-head card">
       <div class="tq-head-left">
-        <h2 class="card-title">AI 生成任务</h2>
-        <p class="tq-head-desc">查看后台 AI 生成简历模板的任务执行情况。排队中 / 生成中的任务会每 4 秒自动刷新；已完成、失败、已取消任务保留在内存中（服务重启后清空，最多保留最近 50 条）。</p>
+        <h2 class="card-title">任务列表</h2>
+        <p class="tq-head-desc">统一查看前后端所有长任务的处理情况（AI 模板生成、报告生成、简历解析、截图识别、简历结构化），状态实时同步。存在排队中或执行中的任务时每 4 秒自动刷新。</p>
       </div>
       <div class="tq-head-actions">
-        <button class="btn btn-ghost btn-sm" type="button" :disabled="loading" @click="loadJobs(true)">
+        <button class="btn btn-ghost btn-sm" type="button" :disabled="loading" @click="loadAll(true)">
           <AppIcon name="refresh" :size="15" :class="{ spinning: refreshing }" />
           刷新
         </button>
@@ -27,46 +27,75 @@
         :key="s.key || 'all'"
         type="button"
         class="stat-card"
-        :class="{ active: filter === s.key }"
-        @click="setFilter(s.key)"
+        :class="{ active: statusFilter === s.key }"
+        @click="setStatus(s.key)"
       >
         <span class="stat-label">{{ s.label }}</span>
         <span class="stat-value" :class="'stat-' + (s.key || 'all')">{{ s.count }}</span>
       </button>
     </div>
 
-    <!-- 筛选 + 自动刷新 -->
+    <!-- 筛选 -->
     <div class="tq-filter card">
-      <span class="filter-label">状态筛选</span>
-      <div class="filter-chips" role="tablist" aria-label="任务状态筛选">
-        <button
-          v-for="s in statusOptions"
-          :key="s.key"
-          type="button"
-          role="tab"
-          :aria-selected="filter === s.key"
-          class="filter-chip"
-          :class="{ active: filter === s.key }"
-          @click="setFilter(s.key)"
-        >{{ s.label }}</button>
+      <div class="tq-filter-row">
+        <span class="filter-label">任务类型</span>
+        <div class="filter-chips" role="tablist" aria-label="任务类型筛选">
+          <button
+            v-for="t in typeOptions"
+            :key="t.key || 'all'"
+            type="button"
+            role="tab"
+            :aria-selected="typeFilter === t.key"
+            class="filter-chip"
+            :class="{ active: typeFilter === t.key }"
+            @click="setType(t.key)"
+          >{{ t.label }}</button>
+        </div>
       </div>
-      <label class="auto-toggle" title="存在排队中或生成中任务时自动每 4 秒刷新">
-        <input v-model="autoRefresh" type="checkbox" />
-        <span>自动刷新</span>
-      </label>
+      <div class="tq-filter-row">
+        <span class="filter-label">状态筛选</span>
+        <div class="filter-chips" role="tablist" aria-label="任务状态筛选">
+          <button
+            v-for="s in statusOptions"
+            :key="s.key"
+            type="button"
+            role="tab"
+            :aria-selected="statusFilter === s.key"
+            class="filter-chip"
+            :class="{ active: statusFilter === s.key }"
+            @click="setStatus(s.key)"
+          >{{ s.label }}</button>
+        </div>
+      </div>
+      <div class="tq-filter-row tq-filter-extra">
+        <input
+          v-model="keyword"
+          type="search"
+          class="tq-search"
+          placeholder="搜索任务名称 / ID…"
+          aria-label="搜索任务"
+          @keyup.enter="loadJobs(true)"
+          @search="loadJobs(true)"
+        />
+        <label class="auto-toggle" title="存在排队中或执行中任务时自动每 4 秒刷新">
+          <input v-model="autoRefresh" type="checkbox" />
+          <span>自动刷新</span>
+        </label>
+      </div>
     </div>
 
     <!-- 任务表格 -->
     <div class="card tq-table-card">
       <div v-if="loading && !jobs.length" class="empty-state">正在加载任务…</div>
       <div v-else-if="!filteredJobs.length" class="empty-state">
-        <strong>{{ filter ? '该状态下暂无任务' : '暂无任务' }}</strong>
-        <span>在「简历模板」页点击「AI 生成新排版」或「新增模板 → AI 生成」后，任务会出现在这里。</span>
+        <strong>{{ hasFilters ? '筛选条件下暂无任务' : '暂无任务' }}</strong>
+        <span>用户上传简历解析、生成分析报告、截图识别，或在「简历模板」页点击「AI 生成新排版」后，任务会出现在这里。</span>
       </div>
       <div v-else class="table-wrap">
         <table class="table">
           <thead>
             <tr>
+              <th>任务类型</th>
               <th>任务</th>
               <th>状态</th>
               <th>创建时间</th>
@@ -77,16 +106,18 @@
           </thead>
           <tbody>
             <tr v-for="job in filteredJobs" :key="job.id">
+              <td><span class="badge badge-neutral">{{ job.taskTypeLabel || job.taskType || '—' }}</span></td>
               <td>
-                <div class="job-name">{{ job.occupationName }}</div>
+                <div class="job-name" :title="job.title">{{ job.title || '—' }}</div>
+                <div class="job-sub cell-muted" :title="job.subtitle">{{ job.subtitle || '—' }}</div>
                 <div class="job-id cell-muted" :title="job.id">{{ shortId(job.id) }}<span v-if="job.retriedFrom && job.retriedFrom !== job.id" class="retried-mark" title="由重试产生">重试</span></div>
               </td>
               <td><span class="badge" :class="badgeClass(job.status)">{{ statusText(job.status) }}</span></td>
               <td class="cell-secondary">{{ formatTime(job.createdAt) }}</td>
               <td class="cell-secondary">{{ durationText(job) }}</td>
               <td>
-                <div v-if="job.status === 'done'" class="job-result job-done" :title="job.templateName">{{ job.templateName || '已生成' }}</div>
-                <div v-else-if="job.status === 'error'" class="job-result job-error" :title="job.error">{{ job.error || '生成失败' }}</div>
+                <div v-if="job.status === 'done'" class="job-result job-done" :title="doneTitle(job)">{{ doneText(job) }}</div>
+                <div v-else-if="job.status === 'error'" class="job-result job-error" :title="job.error">{{ job.error || '执行失败' }}</div>
                 <div v-else-if="job.status === 'canceled'" class="cell-muted">已取消</div>
                 <div v-else class="cell-muted">—</div>
               </td>
@@ -106,7 +137,12 @@
         </table>
       </div>
       <div class="tq-foot">
-        <span class="cell-muted">当前显示 {{ filteredJobs.length }} 个任务 · 内存共 {{ jobs.length }} 个 · 队列待执行 {{ queued }}</span>
+        <span class="cell-muted">共 {{ total }} 个任务 · 本页 {{ filteredJobs.length }} 个 · 排队/执行中 {{ activeCount }}</span>
+        <div class="tq-pager">
+          <button class="btn btn-ghost btn-sm" type="button" :disabled="page <= 1 || loading" @click="changePage(page - 1)">上一页</button>
+          <span class="cell-muted">第 {{ page }} / {{ totalPages || 1 }} 页</span>
+          <button class="btn btn-ghost btn-sm" type="button" :disabled="page >= totalPages || loading" @click="changePage(page + 1)">下一页</button>
+        </div>
         <span v-if="hasActive" class="live-tip"><span class="live-dot" aria-hidden="true"></span>自动刷新中</span>
       </div>
     </div>
@@ -118,38 +154,48 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import AppIcon from '../components/AppIcon.vue'
 import { api } from '../api'
 
+const PAGE_SIZE = 50
+
 const jobs = ref([])
-const queued = ref(0)
+const total = ref(0)
+const stats = ref({ pending: 0, running: 0, done: 0, error: 0, canceled: 0, total: 0 })
 const loading = ref(false)
 const refreshing = ref(false)
 const errorMsg = ref('')
-const filter = ref('') // '' = 全部
+const typeFilter = ref('') // '' = 全部
+const statusFilter = ref('') // '' = 全部
+const keyword = ref('')
+const page = ref(1)
 const autoRefresh = ref(true)
 let timer = null
 
 const STATUS_META = {
   pending: { label: '排队中', badge: 'badge-neutral' },
-  running: { label: '生成中', badge: 'badge-info' },
+  running: { label: '执行中', badge: 'badge-info' },
   done: { label: '已完成', badge: 'badge-success' },
   error: { label: '失败', badge: 'badge-danger' },
   canceled: { label: '已取消', badge: 'badge-warning' },
 }
+const typeOptions = [
+  { key: '', label: '全部类型' },
+  { key: 'template_generate', label: 'AI 模板生成' },
+  { key: 'report_generate', label: '报告生成' },
+  { key: 'resume_parse', label: '简历解析' },
+  { key: 'screenshot_ocr', label: '截图识别' },
+  { key: 'resume_structure', label: '简历结构化' },
+]
 const statusOptions = Object.entries(STATUS_META).map(([key, meta]) => ({ key, label: meta.label }))
 
-const counts = computed(() => {
-  const c = { pending: 0, running: 0, done: 0, error: 0, canceled: 0 }
-  for (const j of jobs.value) c[j.status] = (c[j.status] || 0) + 1
-  return c
-})
-
 const statItems = computed(() => [
-  { key: '', label: '全部', count: jobs.value.length },
-  ...statusOptions.map(s => ({ key: s.key, label: s.label, count: counts.value[s.key] || 0 })),
+  { key: '', label: '全部', count: stats.value.total || 0 },
+  ...statusOptions.map(s => ({ key: s.key, label: s.label, count: stats.value[s.key] || 0 })),
 ])
-
-const historyCount = computed(() => (counts.value.done || 0) + (counts.value.error || 0) + (counts.value.canceled || 0))
-const hasActive = computed(() => jobs.value.some(j => j.status === 'pending' || j.status === 'running'))
-const filteredJobs = computed(() => (filter.value ? jobs.value.filter(j => j.status === filter.value) : jobs.value))
+const historyCount = computed(() => (stats.value.done || 0) + (stats.value.error || 0) + (stats.value.canceled || 0))
+const hasActive = computed(() => (stats.value.pending || 0) + (stats.value.running || 0) > 0)
+const activeCount = computed(() => (stats.value.pending || 0) + (stats.value.running || 0))
+const filteredJobs = computed(() => jobs.value)
+const hasFilters = computed(() => Boolean(typeFilter.value || statusFilter.value || keyword.value))
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
 const statusText = s => STATUS_META[s]?.label || s || '—'
 const badgeClass = s => STATUS_META[s]?.badge || 'badge-neutral'
@@ -172,20 +218,54 @@ function durationText(job) {
   return `${Math.floor(sec / 60)} 分 ${pad2(sec % 60)} 秒`
 }
 
-function setFilter(key) {
-  filter.value = key || ''
+function doneText(job) {
+  if (!job.result) return '已完成'
+  return job.result.templateName || job.result.reportName || (job.result.fileRef ? '解析完成' : '已完成')
+}
+function doneTitle(job) {
+  return doneText(job)
+}
+
+function setType(key) {
+  typeFilter.value = key || ''
+  page.value = 1
+  loadAll()
+}
+function setStatus(key) {
+  statusFilter.value = key || ''
+  page.value = 1
+  loadAll()
+}
+function changePage(next) {
+  if (next < 1 || next > totalPages.value) return
+  page.value = next
+  loadJobs()
+}
+
+async function loadStats() {
+  try {
+    stats.value = (await api.jobsStats()) || {}
+  } catch (error) {
+    // 统计失败不阻塞列表
+  }
 }
 
 async function loadJobs(manual = false) {
   if (manual) refreshing.value = true
   loading.value = true
   try {
-    const list = await api.listGenerateJobs()
-    jobs.value = list || []
-    queued.value = (list || []).filter(j => j.status === 'pending' || j.status === 'running').length
+    const data = await api.listJobs({
+      type: typeFilter.value || undefined,
+      status: statusFilter.value || undefined,
+      q: keyword.value.trim() || undefined,
+      limit: PAGE_SIZE,
+      offset: (page.value - 1) * PAGE_SIZE,
+    })
+    jobs.value = data.jobs || []
+    total.value = data.total || 0
     errorMsg.value = ''
   } catch (error) {
-    errorMsg.value = error.message || '无法查询 AI 生成任务，请刷新页面重试。'
+    errorMsg.value = error.message || '无法查询任务列表，请刷新页面重试。'
   } finally {
     loading.value = false
     refreshing.value = false
@@ -193,56 +273,58 @@ async function loadJobs(manual = false) {
   }
 }
 
-function startPolling() {
-  if (timer) return
-  timer = setInterval(() => loadJobs(), 4000)
+async function loadAll(manual = false) {
+  await Promise.all([loadStats(), loadJobs(manual)])
 }
 
+function startPolling() {
+  if (timer) return
+  timer = setInterval(() => { loadStats(); loadJobs() }, 4000)
+}
 function stopPolling() {
   if (timer) {
     clearInterval(timer)
     timer = null
   }
 }
-
 function syncPolling() {
   if (autoRefresh.value && hasActive.value) startPolling()
   else stopPolling()
 }
 
 async function cancelJob(job) {
-  if (!window.confirm(`确定取消「${job.occupationName}」的排队生成任务吗？`)) return
+  if (!window.confirm(`确定取消「${job.title || job.id}」的排队任务吗？`)) return
   try {
-    await api.cancelGenerateJob(job.id)
-    await loadJobs()
+    await api.cancelJob(job.id)
+    await loadAll()
   } catch (error) {
     errorMsg.value = error.message
   }
 }
 
 async function retryJob(job) {
-  const action = job.status === 'canceled' ? '重新生成' : '重试'
-  if (!window.confirm(`确定${action}「${job.occupationName}」吗？任务将重新加入队列后台执行。`)) return
+  const action = job.status === 'canceled' ? '重新执行' : '重试'
+  if (!window.confirm(`确定${action}「${job.title || job.id}」吗？`)) return
   try {
-    await api.retryGenerateJob(job.id)
-    await loadJobs()
+    await api.retryJob(job.id)
+    await loadAll()
   } catch (error) {
     errorMsg.value = error.message
   }
 }
 
 async function clearHistory() {
-  if (!window.confirm('确定清空已完成 / 失败 / 已取消的任务历史吗？排队中和生成中的任务会保留。')) return
+  if (!window.confirm('确定清空已完成 / 失败 / 已取消的任务历史吗？排队中和执行中的任务会保留。')) return
   try {
-    await api.clearGenerateJobs()
-    await loadJobs()
+    await api.clearJobs()
+    await loadAll()
   } catch (error) {
     errorMsg.value = error.message
   }
 }
 
 onMounted(() => {
-  loadJobs()
+  loadAll()
 })
 onUnmounted(() => {
   stopPolling()
@@ -274,7 +356,7 @@ onUnmounted(() => {
   font-size: 12.5px;
   line-height: 1.6;
   color: var(--color-text-muted);
-  max-width: 720px;
+  max-width: 760px;
 }
 .tq-head-actions {
   display: flex;
@@ -339,16 +421,25 @@ onUnmounted(() => {
 /* ===== 筛选 ===== */
 .tq-filter {
   display: flex;
-  align-items: center;
-  gap: var(--space-4);
+  flex-direction: column;
+  gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
+}
+.tq-filter-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
   flex-wrap: wrap;
+}
+.tq-filter-extra {
+  justify-content: space-between;
 }
 .filter-label {
   font-size: 13px;
   font-weight: 600;
   color: var(--color-text-secondary);
   white-space: nowrap;
+  min-width: 58px;
 }
 .filter-chips {
   display: flex;
@@ -375,6 +466,21 @@ onUnmounted(() => {
   background: var(--color-primary);
   border-color: var(--color-primary);
   color: #fff;
+}
+.tq-search {
+  min-width: 220px;
+  padding: 7px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.tq-search:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
 }
 .auto-toggle {
   display: inline-flex;
@@ -403,6 +509,17 @@ onUnmounted(() => {
 .job-name {
   font-weight: 600;
   font-size: 13.5px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.job-sub {
+  max-width: 320px;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .job-id {
   display: flex;
@@ -445,6 +562,11 @@ onUnmounted(() => {
   border-top: 1px solid var(--color-border);
   flex-wrap: wrap;
 }
+.tq-pager {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
 .live-tip {
   display: inline-flex;
   align-items: center;
@@ -470,6 +592,10 @@ onUnmounted(() => {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+  .spinning { animation: none; }
+}
 
 @media (max-width: 1080px) {
   .tq-stats {
@@ -480,8 +606,20 @@ onUnmounted(() => {
   .tq-stats {
     grid-template-columns: repeat(2, 1fr);
   }
+  .tq-filter-extra {
+    flex-direction: column;
+    align-items: stretch;
+  }
   .auto-toggle {
     margin-left: 0;
+  }
+  .tq-search {
+    min-width: 0;
+    width: 100%;
+  }
+  .tq-foot {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 </style>

@@ -520,3 +520,49 @@
 ### 人工核对入口
 - 本地：http://127.0.0.1:3216 登录（admin@jobmirror.local）→ 「生成任务」
 - 生产：https://gwj.zhicha.io/admin → 「生成任务」
+
+
+---
+
+## 2026-08-11 · 统一任务列表（菜单「任务列表」，前后端长任务全部纳管）【本地验证 PASS，待用户确认】
+
+**环境**：管理后台 http://127.0.0.1:3216（本地）→ 生产 /admin/
+
+> 背景：用户要求菜单名称叫「任务列表」；前后端所有有长任务处理的环节都纳入这个查看管理列表，做好状态同步即可。
+
+### 开发要求（长期有效，禁止回退）
+- 菜单名称统一为「任务列表」（侧边栏 /admin/task-queue，页面标题「任务列表」），不再叫「生成任务」/「AI 生成任务」
+- 任务统一落库 `app_jobs` 表（PG 持久化，服务重启不丢），状态机：`pending → running → done | error | canceled`
+- 涉及前后端所有长任务/异步/耗时处理都写入该表并同步状态，当前已纳管 5 类：
+  1. AI 模板生成（admin）`template_generate`：FIFO 队列串行执行，进度/结果/错误全程同步
+  2. 报告生成（用户端 analysisQueue+worker）`report_generate`：入队 pending → worker 执行 running → done/error，job id = reportId
+  3. 简历上传解析 `resume_parse`：解析完成/失败同步状态（result 含 fileRef/mode）
+  4. 岗位截图识别 `screenshot_ocr`：识别完成/失败同步状态（result 含 companyShortName）
+  5. 简历文本结构化 `resume_structure`：结构化完成/失败同步状态
+- 旧接口兼容保留：`/resume-templates/generate-jobs*` 4 个接口仍返回旧字段格式（模板列表页轮询未改动），改从 PG 读取
+- 启动恢复：admin 只标 `template_generate` 中断任务；frontend 只标 `report_generate` 中断任务（不误标其他服务任务）
+- 用户端（PC/H5）不新增任何任务队列管理页面
+
+### 确认项 1：入口与菜单名
+- 操作：管理后台 → 左侧导航
+- 预期：菜单显示「任务列表」（不是「生成任务」）；进入 /admin/task-queue 页面标题为「任务列表」，含类型筛选（全部类型/AI 模板生成/报告生成/简历解析/截图识别/简历结构化 6 项）、状态筛选（全部/排队中/执行中/已完成/失败/已取消）、搜索框、6 张统计卡片、自动刷新（4s，有活动任务时）、手动刷新、分页（每页 50）
+- 本地验证（2026-08-11 PASS，headless Chrome CDP）：侧边栏「任务列表」、页面标题、6 统计卡片、类型筛选 6 chips、状态筛选 5 chips、搜索框、自动刷新、分页器均渲染正常，类型筛选点击生效
+
+### 确认项 2：AI 模板生成任务纳入统一列表
+- 操作：「简历模板」页提交 AI 生成任务 → 「任务列表」查看
+- 预期：任务出现在统一列表（任务类型=AI 模板生成），状态 pending → running → done 全程可见，结果含生成的模板名；旧 generate-jobs 接口同步可见同一批任务
+- 本地验证（2026-08-11 PASS）：提交 sales 生成 → 统一列表 pending → running → done + result(templateId/templateName) 约 104 秒
+
+### 确认项 3：用户端长任务状态同步
+- 操作：PC 上传简历解析 / 提交岗位分析 / 重新分析 / 结构化保存后，到后台「任务列表」查看
+- 预期：分别出现「简历解析」「报告生成」「简历结构化」任务行，状态随执行同步为 done/error；报告生成任务 job id = reportId，入队即 pending
+- 本地验证（2026-08-11 PASS）：上传 PDF 解析 → resume_parse done；/api/analyze + reanalyze → report_generate pending ×2；jobs/stats 汇总正确
+
+### 确认项 4：分页 / 筛选 / 统计 / 清空
+- 操作：任务列表页使用类型筛选、状态筛选、搜索、翻页、清空历史
+- 预期：筛选与分页生效，统计卡片计数正确；清空历史仅清除 done/error/canceled，保留 pending/running
+- 本地验证（2026-08-11 PASS）：分页/类型/状态筛选、stats 汇总、clear-history 全部通过（API 冒烟）
+
+### 人工核对入口
+- 本地：http://127.0.0.1:3216 登录（admin@jobmirror.local）→ 「任务列表」
+- 生产：https://gwj.zhicha.io/admin → 「任务列表」

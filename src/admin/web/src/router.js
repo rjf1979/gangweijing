@@ -1,4 +1,4 @@
-﻿import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory } from 'vue-router'
 import { store } from './store'
 
 const routes = [
@@ -13,7 +13,7 @@ const routes = [
       { path: 'reports', name: 'reports', component: () => import('./views/ReportsView.vue'), meta: { title: '报告管理' } },
       { path: 'reports/:id', name: 'report-detail', component: () => import('./views/ReportDetailView.vue'), meta: { title: '报告详情' } },
       { path: 'resume-templates', name: 'resume-templates', component: () => import('./views/ResumeTemplatesView.vue'), meta: { title: '简历模板' } },
-      { path: 'task-queue', name: 'task-queue', component: () => import('./views/TaskQueueView.vue'), meta: { title: 'AI 生成任务' } },
+      { path: 'task-queue', name: 'task-queue', component: () => import('./views/TaskQueueView.vue'), meta: { title: '任务列表' } },
       { path: 'resume-structure', name: 'resume-structure', component: () => import('./views/ResumeStructureView.vue'), meta: { title: '简历结构' } },
       { path: 'ai-settings', name: 'ai-settings', component: () => import('./views/AiSettingsView.vue'), meta: { title: 'AI 设置' } },
       { path: 'settings', name: 'settings', component: () => import('./views/SettingsView.vue'), meta: { title: '系统设置' } },

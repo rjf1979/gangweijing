@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="admin-shell">
     <aside class="sidebar">
       <div class="brand">
@@ -61,7 +61,7 @@ const navItems = [
   { to: '/users', label: '用户管理', icon: 'users' },
   { to: '/reports', label: '报告管理', icon: 'file-text' },
   { to: '/resume-templates', label: '简历模板', icon: 'file-text' },
-  { to: '/task-queue', label: '生成任务', icon: 'activity' },
+  { to: '/task-queue', label: '任务列表', icon: 'activity' },
   { to: '/resume-structure', label: '简历结构', icon: 'layers' },
   { to: '/ai-settings', label: 'AI 设置', icon: 'spark' },
   { to: '/settings', label: '系统设置', icon: 'settings' },

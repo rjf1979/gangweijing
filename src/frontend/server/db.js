@@ -148,6 +148,29 @@ UPDATE resume_templates SET is_default = true
     WHERE NOT EXISTS (SELECT 1 FROM resume_templates d WHERE d.occupation_id = resume_templates.occupation_id AND d.is_default) ORDER BY occupation_id, created_at, id
   );
 
+CREATE TABLE IF NOT EXISTS app_jobs (
+  id text PRIMARY KEY,
+  task_type text NOT NULL,
+  title text NOT NULL DEFAULT '',
+  subtitle text NOT NULL DEFAULT '',
+  status text NOT NULL DEFAULT 'pending',
+  progress integer,
+  error text,
+  ref_type text,
+  ref_id text,
+  owner text NOT NULL DEFAULT 'admin',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  started_at timestamptz,
+  finished_at timestamptz,
+  canceled_at timestamptz,
+  retried_from text,
+  retries integer NOT NULL DEFAULT 0,
+  result jsonb
+);
+CREATE INDEX IF NOT EXISTS app_jobs_created_at_idx ON app_jobs (created_at DESC);
+CREATE INDEX IF NOT EXISTS app_jobs_status_idx ON app_jobs (status);
+CREATE INDEX IF NOT EXISTS app_jobs_type_idx ON app_jobs (task_type);
+
 `;
 
 function selectedUrl() {
@@ -174,6 +197,27 @@ const mapAiModel = row => row && ({
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
+
+const mapJob = row => row && ({
+  id: row.id,
+  taskType: row.task_type,
+  title: row.title,
+  subtitle: row.subtitle,
+  status: row.status,
+  progress: row.progress == null ? null : Number(row.progress),
+  error: row.error || null,
+  refType: row.ref_type || null,
+  refId: row.ref_id || null,
+  owner: row.owner || 'admin',
+  createdAt: row.created_at,
+  startedAt: row.started_at,
+  finishedAt: row.finished_at,
+  canceledAt: row.canceled_at,
+  retriedFrom: row.retried_from || null,
+  retries: Number(row.retries) || 0,
+  result: row.result || null,
+});
+
 
 export function createPgStore() {
   const connectionString = selectedUrl() || process.env.DATABASE_URL;
@@ -279,6 +323,63 @@ export function createPgStore() {
     async listResumeTemplates(occupationId) {
       const { rows } = await pool.query('SELECT * FROM resume_templates WHERE occupation_id = $1 ORDER BY is_default DESC, created_at ASC, id ASC', [occupationId]);
       return rows.map(row => ({ id: row.id, occupationId: row.occupation_id, name: row.name, description: row.description, html: row.html, source: row.source, isDefault: Boolean(row.is_default) }));
+    },
+
+    // ===== 统一任务（app_jobs）：长任务状态同步到 PG，管理后台任务列表页统一查看 =====
+    async insertJob(job) {
+      const { rows } = await pool.query(
+        `INSERT INTO app_jobs (id, task_type, title, subtitle, status, progress, error, ref_type, ref_id, owner, created_at, started_at, finished_at, canceled_at, retried_from, retries, result)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11, now()),$12,$13,$14,$15,$16,$17) RETURNING *`,
+        [job.id, job.taskType, job.title || '', job.subtitle || '', job.status || 'pending', job.progress ?? null, job.error || null, job.refType || null, job.refId || null, job.owner || 'admin', job.createdAt || null, job.startedAt || null, job.finishedAt || null, job.canceledAt || null, job.retriedFrom || null, job.retries ?? 0, job.result ? JSON.stringify(job.result) : null]
+      );
+      return mapJob(rows[0]);
+    },
+    async updateJob(id, patch = {}) {
+      const fields = [];
+      const values = [];
+      const push = (col, val) => { fields.push(col + ' = $' + (fields.length + 1)); values.push(val); };
+      if ('status' in patch) push('status', patch.status);
+      if ('progress' in patch) push('progress', patch.progress);
+      if ('error' in patch) push('error', patch.error || null);
+      if ('startedAt' in patch) push('started_at', patch.startedAt || null);
+      if ('finishedAt' in patch) push('finished_at', patch.finishedAt || null);
+      if ('canceledAt' in patch) push('canceled_at', patch.canceledAt || null);
+      if ('retriedFrom' in patch) push('retried_from', patch.retriedFrom || null);
+      if ('retries' in patch) push('retries', patch.retries);
+      if ('result' in patch) push('result', patch.result == null ? null : JSON.stringify(patch.result));
+      if (!fields.length) return null;
+      values.push(id);
+      const { rows } = await pool.query('UPDATE app_jobs SET ' + fields.join(', ') + ' WHERE id = $' + (fields.length + 1) + ' RETURNING *', values);
+      return mapJob(rows[0] || null);
+    },
+    async getJob(id) {
+      const { rows } = await pool.query('SELECT * FROM app_jobs WHERE id = $1', [id]);
+      return mapJob(rows[0] || null);
+    },
+    async listPendingJobs({ owner, taskType } = {}) {
+      const conditions = [];
+      const values = [];
+      if (owner) { conditions.push('owner = $' + (values.length + 1)); values.push(owner); }
+      if (taskType) { conditions.push('task_type = $' + (values.length + 1)); values.push(taskType); }
+      conditions.push("status = 'pending'");
+      const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+      const { rows } = await pool.query(`SELECT * FROM app_jobs ${where} ORDER BY created_at ASC, id`, values);
+      return rows.map(mapJob);
+    },
+    async markInterruptedJobs({ taskType, statuses = ['pending', 'running'] } = {}) {
+      const conditions = [];
+      const values = [];
+      const push = (sql, val) => { conditions.push(sql); values.push(val); };
+      if (taskType) { conditions.push('task_type = $' + (values.length + 1)); values.push(taskType); }
+      conditions.push('status = ANY($' + (values.length + 1) + ')');
+      values.push(statuses);
+      const where = 'WHERE ' + conditions.join(' AND ');
+      const { rows } = await pool.query(
+        "UPDATE app_jobs SET status = 'error', error = COALESCE(error, '服务重启导致任务中断'), finished_at = now() " + where + " RETURNING id",
+        values
+      );
+      return rows.length;
     }
   };
 }
+
