@@ -16,7 +16,7 @@
             <span class="invite-field-label">我的邀请码</span>
             <div class="invite-field-row">
               <code class="invite-code">{{ info.code || '—' }}</code>
-              <button type="button" class="neo-button neo-button-secondary invite-copy" :disabled="copying" @click="copy(info.code, '邀请码')">
+              <button type="button" class="neo-button neo-button-secondary invite-copy" :disabled="copying !== ''" @click="copy('code', info.code)">
                 {{ copying === 'code' ? '已复制' : '复制' }}
               </button>
             </div>
@@ -25,11 +25,12 @@
             <span class="invite-field-label">邀请链接</span>
             <div class="invite-field-row">
               <code class="invite-link">{{ info.link || '—' }}</code>
-              <button type="button" class="neo-button neo-button-secondary invite-copy" :disabled="copying" @click="copy(info.link, '邀请链接')">
+              <button type="button" class="neo-button neo-button-secondary invite-copy" :disabled="copying !== ''" @click="copy('link', info.link)">
                 {{ copying === 'link' ? '已复制' : '复制' }}
               </button>
             </div>
           </div>
+          <p v-if="copyError" class="error invite-copy-error" role="alert">{{ copyError }}</p>
           <p class="invite-stat" role="status">
             已邀请 <strong>{{ info.inviteCount ?? 0 }}</strong> 位新用户
           </p>
@@ -52,6 +53,7 @@ const loading = ref(false)
 const error = ref('')
 const info = ref({})
 const copying = ref('')
+const copyError = ref('')
 
 function close() {
   visible.value = false
@@ -72,14 +74,42 @@ async function open() {
   }
 }
 
-async function copy(text, label) {
-  if (!text) return
-  copying.value = label
+async function copyText(text) {
+  // 优先 Clipboard API（HTTPS/本地安全上下文）
   try {
-    await navigator.clipboard.writeText(text)
-    setTimeout(() => { copying.value = '' }, 1200)
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch { /* 降级到 execCommand */ }
+  // 降级：临时 textarea + execCommand
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.left = '-9999px'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    ta.remove()
+    return ok
   } catch {
+    return false
+  }
+}
+
+async function copy(key, text) {
+  if (!text) return
+  copying.value = key
+  copyError.value = ''
+  const ok = await copyText(text)
+  if (ok) {
+    setTimeout(() => { if (copying.value === key) copying.value = '' }, 1200)
+  } else {
     copying.value = ''
+    copyError.value = '复制失败，请手动选择文本复制'
+    setTimeout(() => { copyError.value = '' }, 2000)
   }
 }
 

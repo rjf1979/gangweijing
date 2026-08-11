@@ -1339,6 +1339,7 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
 .invite-stat { margin: 0; font-size: 14px; }
 .invite-stat strong { font-size: 18px; }
 .invite-tip { margin: 0; }
+.invite-copy-error { margin: 0; font-size: 12.5px; }
 .invite-actions {
   display: flex;
   justify-content: flex-end;
