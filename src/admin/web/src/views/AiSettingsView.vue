@@ -55,6 +55,43 @@
         </div>
       </section>
 
+      <!-- 接口调用配置 -->
+      <section class="card">
+        <div class="card-head">
+          <div class="ai-head-text">
+            <h3 class="card-title">接口调用</h3>
+            <p class="ai-desc">
+              AI 接口调用支持长文本（最大 1M 字符），生成大段 HTML 模板时超时按下方秒数等待；请根据实际耗时调大。
+            </p>
+          </div>
+        </div>
+        <div class="card-body call-config-body">
+          <div class="call-config-row">
+            <label class="field call-field" for="call-timeout">
+              <span class="field-label">接口调用超时（秒）</span>
+              <input
+                id="call-timeout"
+                v-model.number="callTimeout"
+                class="input"
+                type="number"
+                min="30"
+                max="3600"
+                step="30"
+              />
+            </label>
+            <div class="call-config-actions">
+              <button class="btn btn-primary" type="button" :disabled="savingCall" @click="saveCallTimeout">
+                <AppIcon name="check" :size="15" />
+                {{ savingCall ? '保存中…' : '保存' }}
+              </button>
+              <span v-if="callSaved" class="call-saved">已保存</span>
+            </div>
+          </div>
+          <p class="call-hint">说明：模板 AI 生成实测约 110-125 秒，默认 300 秒足够；如需生成更长内容可在 30-3600 秒范围内调整。接口请求体已放大至 5MB，可承载 1M 字符级长文本。</p>
+          <p v-if="callError" class="call-error">{{ callError }}</p>
+        </div>
+      </section>
+
       <!-- API Key 池 -->
       <section class="card">
         <div class="card-head">
@@ -547,7 +584,13 @@ const keyEditingId = ref(null)
 const keyBusy = ref(false)
 const keyDeleteTarget = ref(null)
 const deletingKey = ref(false)
-const keyForm = reactive({
+  // 接口调用配置
+  const callTimeout = ref(300)
+  const savingCall = ref(false)
+  const callError = ref('')
+  const callSaved = ref(false)
+
+  const keyForm = reactive({
   name: '',
   providerChoice: '__none__',
   provider: '',
@@ -639,10 +682,11 @@ async function loadAll() {
   loading.value = true
   error.value = ''
   try {
-    const [list, metaData, keyData] = await Promise.all([api.get('/ai-models'), api.get('/ai-models/meta'), api.get('/ai-keys')])
+    const [list, metaData, keyData, settingsData] = await Promise.all([api.get('/ai-models'), api.get('/ai-models/meta'), api.get('/ai-keys'), api.get('/settings')])
     models.value = list.models || []
     keys.value = keyData.keys || []
     meta.value = { ...meta.value, ...metaData }
+    callTimeout.value = settingsData?.settings?.ai_call_timeout_seconds ?? 300
   } catch (err) {
     error.value = err.message || '加载 AI 模型失败。'
   } finally {
@@ -959,6 +1003,27 @@ function fillFromReference(ref) {
   toast('已按参考数据填入表单，请核对后保存', 'success')
 }
 
+async function saveCallTimeout() {
+  const n = Math.round(Number(callTimeout.value))
+  if (!Number.isFinite(n) || n < 30 || n > 3600) {
+    callError.value = '超时时间需为 30-3600 秒。'
+    return
+  }
+  savingCall.value = true
+  callError.value = ''
+  callSaved.value = false
+  try {
+    await api.put('/settings', { aiCallTimeoutSeconds: n })
+    callTimeout.value = n
+    callSaved.value = true
+    setTimeout(() => { callSaved.value = false }, 2000)
+  } catch (err) {
+    callError.value = err.message || '保存失败。'
+  } finally {
+    savingCall.value = false
+  }
+}
+
 onMounted(loadAll)
 </script>
 <style scoped>
@@ -966,6 +1031,39 @@ onMounted(loadAll)
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+.call-config-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.call-config-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.call-field {
+  flex: 1 1 260px;
+}
+.call-config-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.call-saved {
+  font-size: 12.5px;
+  color: var(--color-success, #22c55e);
+}
+.call-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin: 0;
+  line-height: 1.6;
+}
+.call-error {
+  font-size: 12.5px;
+  color: var(--color-danger);
 }
 .ai-loading {
   min-height: 260px;

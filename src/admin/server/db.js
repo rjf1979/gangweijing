@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { readdir, readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 
 const schema = `
@@ -39,6 +40,7 @@ ON CONFLICT (id) DO NOTHING;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS resend_api_key text;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS email_from text;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS analysis_concurrency integer NOT NULL DEFAULT 2;
+  ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS ai_call_timeout_seconds integer NOT NULL DEFAULT 300;
 ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS announcement_updated_at timestamptz;
 -- 自愈：历史编码问题可能导致默认站点名被写成问号/空，启动时仅修复站点名本身。
 -- 注意：admin_settings 为后台用户配置表，公告/邮件密钥等均为用户数据，
@@ -98,6 +100,27 @@ CREATE TABLE IF NOT EXISTS ai_model_reference_prices (
 UPDATE admin_settings
 SET site_name = '岗位镜管理后台'
 WHERE id = 1 AND (site_name IS NULL OR site_name = '' OR site_name ~ '^[?]+$');
+
+CREATE TABLE IF NOT EXISTS resume_templates (
+  id text PRIMARY KEY,
+  occupation_id text NOT NULL,
+  name text NOT NULL DEFAULT '',
+  description text NOT NULL DEFAULT '',
+  html text NOT NULL,
+  source text NOT NULL DEFAULT 'builtin',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+-- 一职业可有多套模板（内置 / AI 生成 / 人工编辑），其中一套为默认；is_default 由管理后台维护
+ALTER TABLE resume_templates ADD COLUMN IF NOT EXISTS is_default boolean NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_resume_templates_one_default_per_occupation
+  ON resume_templates (occupation_id) WHERE is_default;
+-- 存量数据每职业一行，全部设为默认
+UPDATE resume_templates SET is_default = true
+  WHERE id IN (
+    SELECT DISTINCT ON (occupation_id) id FROM resume_templates
+    WHERE NOT is_default ORDER BY occupation_id, created_at, id
+  );
 `;
 
 function selectedUrl() {
@@ -152,6 +175,18 @@ const mapReferencePrice = row => row && ({
   fetchedAt: row.fetched_at,
 });
 
+const mapResumeTemplate = row => row && ({
+  id: row.id,
+  occupationId: row.occupation_id,
+  isDefault: Boolean(row.is_default),
+  name: row.name,
+  description: row.description,
+  html: row.html,
+  source: row.source,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
 export function createPgStore() {
   const connectionString = selectedUrl();
   if (!connectionString) throw new Error('未配置数据库连接：DATABASE_URL_LOCAL / DATABASE_URL_SERVER / DATABASE_URL。');
@@ -204,7 +239,7 @@ export function createPgStore() {
 
     // ===== 站点设置 =====
     async getSettings() {
-      const { rows } = await pool.query('SELECT site_name, announcement, announcement_updated_at, free_quota, registration_enabled, resend_api_key, email_from, analysis_concurrency, updated_at FROM admin_settings WHERE id = 1');
+      const { rows } = await pool.query('SELECT site_name, announcement, announcement_updated_at, free_quota, registration_enabled, resend_api_key, email_from, analysis_concurrency, ai_call_timeout_seconds, updated_at FROM admin_settings WHERE id = 1');
       return rows[0] || null;
     },
     async updateSettings(patch = {}) {
@@ -218,6 +253,7 @@ export function createPgStore() {
       if ('resendApiKey' in patch) push('resend_api_key', patch.resendApiKey || null);
       if ('emailFrom' in patch) push('email_from', patch.emailFrom || null);
       if ('analysisConcurrency' in patch) push('analysis_concurrency', patch.analysisConcurrency);
+        if ('aiCallTimeoutSeconds' in patch) push('ai_call_timeout_seconds', patch.aiCallTimeoutSeconds);
       if (!fields.length) return;
       await pool.query('UPDATE admin_settings SET ' + fields.join(', ') + ', updated_at = now() WHERE id = 1', values);
     },
@@ -533,6 +569,128 @@ export function createPgStore() {
     },
     async deleteReport(id) {
       await pool.query('UPDATE ' + reportTable + ' SET deleted_at = now() WHERE id = $1', [id]);
+    },
+
+    // ===== 简历模板（内置 + AI 生成 + 人工编辑；source: builtin | ai | manual） =====
+    async listResumeTemplates() {
+      const { rows } = await pool.query('SELECT * FROM resume_templates ORDER BY occupation_id, is_default DESC, created_at, id');
+      return rows.map(mapResumeTemplate);
+    },
+    async getResumeTemplate(id) {
+      const { rows } = await pool.query('SELECT * FROM resume_templates WHERE id = $1', [id]);
+      return mapResumeTemplate(rows[0] || null);
+    },
+    async upsertResumeTemplate(input) {
+      // is_default 仅在 INSERT 时写入；ON CONFLICT 更新内容不动 is_default（避免种子/恢复内置抢默认标记）
+      const { rows } = await pool.query(
+        `INSERT INTO resume_templates (id, occupation_id, name, description, html, source, is_default, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,now())
+         ON CONFLICT (id) DO UPDATE SET occupation_id = EXCLUDED.occupation_id, name = EXCLUDED.name, description = EXCLUDED.description, html = EXCLUDED.html, source = EXCLUDED.source, updated_at = now()
+         RETURNING *`,
+        [input.id, input.occupationId, input.name, input.description, input.html, input.source, Boolean(input.isDefault)]
+      );
+      return mapResumeTemplate(rows[0]);
+    },
+    async updateResumeTemplate(id, input = {}) {
+      const fields = [];
+      const values = [];
+      const push = (col, val) => { fields.push(col + ' = $' + (fields.length + 1)); values.push(val); };
+      if ('name' in input) push('name', input.name);
+      if ('description' in input) push('description', input.description);
+      if ('html' in input) push('html', input.html);
+      if ('source' in input) push('source', input.source);
+      if ('isDefault' in input) push('is_default', input.isDefault);
+      if (!fields.length) return null;
+      values.push(id);
+      const { rows } = await pool.query('UPDATE resume_templates SET ' + fields.join(', ') + ', updated_at = now() WHERE id = $' + (fields.length + 1) + ' RETURNING *', values);
+      return mapResumeTemplate(rows[0] || null);
+    },
+    async deleteResumeTemplate(id) {
+      // 若删除的是默认模板，自动将该职业剩余最早一套设为默认
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query('SELECT occupation_id, is_default FROM resume_templates WHERE id = $1', [id]);
+        if (rows.length) {
+          const occ = rows[0].occupation_id;
+          const wasDefault = Boolean(rows[0].is_default);
+          await client.query('DELETE FROM resume_templates WHERE id = $1', [id]);
+          if (wasDefault) {
+            await client.query(
+              `UPDATE resume_templates SET is_default = true
+               WHERE id = (SELECT id FROM resume_templates WHERE occupation_id = $1 AND NOT is_default ORDER BY created_at, id LIMIT 1)`,
+              [occ]
+            );
+          }
+        }
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+    async getDefaultResumeTemplate(occupationId) {
+      const { rows } = await pool.query('SELECT * FROM resume_templates WHERE occupation_id = $1 AND is_default LIMIT 1', [occupationId]);
+      return mapResumeTemplate(rows[0] || null);
+    },
+    async setDefaultResumeTemplate(id) {
+      // 同一职业仅一套默认：先清空该职业默认，再标记目标模板（唯一索引兜底）
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query('SELECT occupation_id FROM resume_templates WHERE id = $1 FOR UPDATE', [id]);
+        if (!rows.length) { await client.query('ROLLBACK'); return null; }
+        const occ = rows[0].occupation_id;
+        await client.query('UPDATE resume_templates SET is_default = false WHERE occupation_id = $1 AND is_default', [occ]);
+        await client.query('UPDATE resume_templates SET is_default = true WHERE id = $1', [id]);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+      return this.getResumeTemplate(id);
+    },
+    // 内置模板：读取 builtin/<id>.html + builtin-meta.js，不存在返回 null
+    async getBuiltinResumeTemplate(id) {
+      let meta = {};
+      try { meta = (await import('./resumeTemplates/builtin-meta.js')).BUILTIN_TEMPLATE_META || {}; } catch {}
+      const def = meta[id];
+      if (!def) return null;
+      let html = '';
+      try { html = await readFile(new URL('./resumeTemplates/builtin/' + id + '.html', import.meta.url), 'utf8'); } catch { return null; }
+      if (!html.trim()) return null;
+      return { id, occupationId: def.occupationId, name: def.name, description: def.description, html };
+    },
+    // 启动种子：扫描 builtin/*.html，仅当不存在或原 source=builtin 时同步，不覆盖 ai/manual
+    async seedBuiltinResumeTemplates() {
+      let files = [];
+      try { files = await readdir(new URL('./resumeTemplates/builtin/', import.meta.url)); } catch { return { imported: 0 }; }
+      let imported = 0;
+      let skipped = 0;
+      for (const file of files) {
+        if (!file.endsWith('.html')) continue;
+        const id = file.slice(0, -5);
+        const builtin = await this.getBuiltinResumeTemplate(id);
+        if (!builtin) continue;
+        const { rows } = await pool.query('SELECT source FROM resume_templates WHERE id = $1', [id]);
+        if (rows.length && rows[0].source !== 'builtin') { skipped += 1; continue; }
+        // 该职业尚无默认模板时，内置模板作为默认；已有默认则不抢
+        const hasDefault = !!(await this.getDefaultResumeTemplate(id));
+        await this.upsertResumeTemplate({ ...builtin, source: 'builtin', isDefault: !hasDefault });
+        imported += 1;
+      }
+      return { imported, skipped };
+    },
+    // 恢复内置：按职业覆盖内置记录（无论当前来源），返回新记录；无内置文件返回 null；不抢默认标记
+    async restoreBuiltinResumeTemplate(occupationId) {
+      const builtin = await this.getBuiltinResumeTemplate(occupationId);
+      if (!builtin) return null;
+      const hasDefault = !!(await this.getDefaultResumeTemplate(occupationId));
+      return this.upsertResumeTemplate({ ...builtin, id: occupationId, source: 'builtin', isDefault: !hasDefault });
     },
   };
 }

@@ -1,0 +1,301 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>简历 · 技术 / 研发</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "Segoe UI", Arial, sans-serif;
+    background: #e9edf2; color: #1f2a37; font-size: 12px; line-height: 1.6;
+  }
+  .sheet {
+    width: 210mm; min-height: 297mm; margin: 0 auto; background: #fff;
+    display: grid; grid-template-columns: 60mm 1fr;
+    box-shadow: 0 8px 40px rgba(20, 40, 70, 0.18);
+  }
+
+  /* ===== 左侧深色栏 ===== */
+  .aside {
+    background: linear-gradient(178deg, #0c2036 0%, #102c4a 55%, #12335a 100%);
+    color: #d7e3f0; padding: 12mm 7.5mm 12mm;
+  }
+  .avatar {
+    width: 30mm; height: 30mm; border-radius: 50%;
+    background: linear-gradient(135deg, #2f6fed, #18b6d8);
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: 700; letter-spacing: 1px;
+    margin-bottom: 5mm; box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+  }
+  .aside h1 {
+    font-size: 24px; font-weight: 800; color: #fff; letter-spacing: 2px; line-height: 1.3;
+  }
+  .aside .role {
+    font-size: 11.5px; color: #8fd0ff; margin: 2.2mm 0 5mm; letter-spacing: 0.5px; font-weight: 600;
+  }
+  .contact { display: flex; flex-direction: column; gap: 2.2mm; margin-bottom: 7mm; }
+  .contact div { font-size: 10.5px; color: #b9c9da; display: flex; gap: 2mm; align-items: baseline; }
+  .contact .k { color: #6f8aa5; min-width: 12mm; flex-shrink: 0; }
+  .aside .block { margin-bottom: 6.5mm; }
+  .aside .block h3 {
+    font-size: 11px; letter-spacing: 2px; color: #7fd0ff; font-weight: 700;
+    border-bottom: 1px solid rgba(127, 208, 255, 0.25); padding-bottom: 1.8mm; margin-bottom: 3mm;
+    display: flex; align-items: center; gap: 2mm;
+  }
+  .aside .block h3::before {
+    content: ""; width: 6px; height: 6px; background: #2f6fed; border-radius: 1px; transform: rotate(45deg);
+  }
+  .skill-group { margin-bottom: 3.2mm; }
+  .skill-group .sg-label { font-size: 9.5px; color: #7d99b5; letter-spacing: 1px; margin-bottom: 1.4mm; }
+  .chips { display: flex; flex-wrap: wrap; gap: 1.4mm; }
+  .chip {
+    font-size: 9px; padding: 0.8mm 2.2mm; border-radius: 2mm;
+    background: rgba(47, 111, 237, 0.22); color: #dcebff; border: 1px solid rgba(127, 208, 255, 0.28);
+    line-height: 1.5;
+  }
+  .mini-list { display: flex; flex-direction: column; gap: 1.8mm; }
+  .mini-list div { font-size: 10px; color: #c3d3e2; }
+  .mini-list .t { color: #fff; font-weight: 600; }
+  .mini-list .d { color: #8aa6c0; font-size: 9px; }
+
+  /* ===== 右侧主区 ===== */
+  .main { padding: 12mm 10mm 12mm 9mm; background: #fff; }
+  .main .block { margin-bottom: 7mm; }
+  .main .block h2 {
+    font-size: 13px; font-weight: 800; color: #0c2036; letter-spacing: 2px;
+    display: flex; align-items: center; gap: 2.5mm; margin-bottom: 4mm;
+  }
+  .main .block h2::after {
+    content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, #2f6fed, #dbe5f0);
+  }
+  .summary {
+    background: linear-gradient(180deg, #f4f8ff, #ffffff); border-left: 3px solid #2f6fed;
+    padding: 3mm 4mm; border-radius: 0 3mm 3mm 0; color: #3a4a5c; line-height: 1.75;
+  }
+  .exp { position: relative; padding-left: 6mm; margin-bottom: 4.5mm; }
+  .exp::before {
+    content: ""; position: absolute; left: 1mm; top: 2mm; bottom: -2.5mm; width: 1px;
+    background: #d5deea;
+  }
+  .exp:last-child::before { display: none; }
+  .exp::after {
+    content: ""; position: absolute; left: 0; top: 2.6mm; width: 3mm; height: 3mm;
+    background: #2f6fed; border-radius: 50%; box-shadow: 0 0 0 1.2mm rgba(47, 111, 237, 0.15);
+  }
+  .exp-head { display: flex; justify-content: space-between; align-items: baseline; gap: 3mm; }
+  .exp-title { font-size: 12px; font-weight: 700; color: #17222f; }
+  .exp-sub { font-size: 10.5px; color: #5a6b7c; }
+  .exp-time { font-size: 9.5px; color: #2f6fed; font-weight: 600; white-space: nowrap; }
+  .exp ul, .entry ul { margin: 1.6mm 0 0; padding-left: 4.5mm; }
+  .exp li, .entry li { font-size: 10.5px; color: #41505f; margin-bottom: 0.8mm; }
+  .entry {
+    border: 1px solid #e3eaf2; border-radius: 3mm; padding: 3.5mm 4mm 3mm; margin-bottom: 3.5mm;
+    background: #fcfdff;
+  }
+  .entry-head { display: flex; justify-content: space-between; align-items: baseline; gap: 3mm; margin-bottom: 1mm; }
+  .entry-name { font-size: 11.5px; font-weight: 700; color: #0c2036; }
+  .entry-role { font-size: 10px; color: #2f6fed; font-weight: 600; }
+  .entry-time { font-size: 9.5px; color: #8a99aa; white-space: nowrap; }
+  .entry-desc { font-size: 10px; color: #5a6b7c; margin: 1mm 0 1.4mm; }
+  .entry-tags { display: flex; flex-wrap: wrap; gap: 1.4mm; margin: 1.6mm 0 0; }
+  .entry-tags span {
+    font-size: 8.5px; background: #eef3fb; color: #3c6bb8; padding: 0.6mm 2mm; border-radius: 2mm;
+  }
+  .edu { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px dashed #e3eaf2; padding: 2mm 0; }
+  .edu:last-child { border-bottom: none; }
+  .edu-main { font-size: 11px; font-weight: 700; color: #17222f; }
+  .edu-sub { font-size: 10px; color: #5a6b7c; }
+  .edu-right { text-align: right; }
+  .edu-time { font-size: 9.5px; color: #8a99aa; }
+  .edu-note { font-size: 9.5px; color: #2f6fed; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; }
+  .mini-card { border: 1px solid #e3eaf2; border-radius: 2.5mm; padding: 2.6mm 3mm; background: #fcfdff; }
+  .mini-card .mc-title { font-size: 10.5px; font-weight: 700; color: #0c2036; }
+  .mini-card .mc-sub { font-size: 9px; color: #8a99aa; margin-top: 0.5mm; }
+
+  @page { size: A4; margin: 0; }
+  @media print {
+    body { background: #fff; }
+    .sheet { box-shadow: none; width: 210mm; min-height: 297mm; }
+  }
+  @media (max-width: 700px) {
+    .sheet { grid-template-columns: 1fr; width: 100%; min-height: auto; }
+  }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <!-- ===== 左侧：基本信息 + 技能 ===== -->
+  <aside class="aside">
+    {{#if:name}}<div class="avatar">{{name}}</div>{{/if}}
+    <h1>{{name}}</h1>
+    <div class="role">{{current_title}}{{#if:current_company}} · {{current_company}}{{/if}}</div>
+
+    <div class="contact">
+      {{#if:phone}}<div><span class="k">电话</span><span>{{phone}}</span></div>{{/if}}
+      {{#if:email}}<div><span class="k">邮箱</span><span>{{email}}</span></div>{{/if}}
+      {{#if:location}}<div><span class="k">城市</span><span>{{location}}</span></div>{{/if}}
+      {{#if:years_of_experience}}<div><span class="k">年限</span><span>{{years_of_experience}}</span></div>{{/if}}
+      {{#if:gender}}<div><span class="k">性别</span><span>{{gender}}</span></div>{{/if}}
+      {{#if:birth_year}}<div><span class="k">出生</span><span>{{birth_year}}</span></div>{{/if}}
+      {{#if:expected_salary}}<div><span class="k">薪资</span><span>{{expected_salary}}</span></div>{{/if}}
+    </div>
+
+    <div class="block">
+      <h3>专业技能</h3>
+      {{#if:skills.technical}}
+      <div class="skill-group">
+        <div class="sg-label">技术栈 / 框架</div>
+        <div class="chips">{{#skills.technical}}<span class="chip">{{.}}</span>{{/skills.technical}}</div>
+      </div>
+      {{/if}}
+      {{#if:skills.tools}}
+      <div class="skill-group">
+        <div class="sg-label">工具 / 平台</div>
+        <div class="chips">{{#skills.tools}}<span class="chip">{{.}}</span>{{/skills.tools}}</div>
+      </div>
+      {{/if}}
+      {{#if:skills.soft}}
+      <div class="skill-group">
+        <div class="sg-label">软技能</div>
+        <div class="chips">{{#skills.soft}}<span class="chip">{{.}}</span>{{/skills.soft}}</div>
+      </div>
+      {{/if}}
+      {{#if:skills.languages}}
+      <div class="skill-group">
+        <div class="sg-label">语言</div>
+        <div class="chips">{{#skills.languages}}<span class="chip">{{.}}</span>{{/skills.languages}}</div>
+      </div>
+      {{/if}}
+    </div>
+
+    {{#if:certificates}}
+    <div class="block">
+      <h3>证书资质</h3>
+      <div class="mini-list">
+        {{#certificates}}<div><span class="t">{{name}}</span>{{#if:issuer}}<span class="d"> · {{issuer}}</span>{{/if}}</div>{{/certificates}}
+      </div>
+    </div>
+    {{/if}}
+
+    {{#if:open_source}}
+    <div class="block">
+      <h3>开源 / 作品</h3>
+      <div class="mini-list">
+        {{#open_source}}<div><span class="t">{{name}}</span><span class="d"> · {{url}}</span></div>{{/open_source}}
+      </div>
+    </div>
+    {{/if}}
+
+    {{#if:interests}}
+    <div class="block">
+      <h3>兴趣爱好</h3>
+      <div class="chips">{{#interests}}<span class="chip">{{.}}</span>{{/interests}}</div>
+    </div>
+    {{/if}}
+  </aside>
+
+  <!-- ===== 右侧：经历 ===== -->
+  <main class="main">
+    {{#if:summary}}
+    <section class="block">
+      <h2>个人简介</h2>
+      <div class="summary">{{summary}}</div>
+    </section>
+    {{/if}}
+
+    {{#if:work_experience}}
+    <section class="block">
+      <h2>工作经历</h2>
+      {{#work_experience}}
+      <div class="exp">
+        <div class="exp-head">
+          <span class="exp-title">{{company}}</span>
+          <span class="exp-time">{{start_date}} — {{end_date}}</span>
+        </div>
+        <div class="exp-sub">{{title}}{{#if:industry}} · {{industry}}{{/if}}</div>
+        <ul>
+          {{#responsibilities}}<li>{{.}}</li>{{/responsibilities}}
+          {{#achievements}}<li class="achievement">{{.}}</li>{{/achievements}}
+        </ul>
+      </div>
+      {{/work_experience}}
+    </section>
+    {{/if}}
+
+    {{#if:project_experience}}
+    <section class="block">
+      <h2>项目经历</h2>
+      {{#project_experience}}
+      <div class="entry">
+        <div class="entry-head">
+          <span class="entry-name">{{name}}</span>
+          <span class="entry-time">{{start_date}} — {{end_date}}</span>
+        </div>
+        <div class="entry-role">{{#if:role}}{{role}}{{/if}}</div>
+        {{#if:description}}<div class="entry-desc">{{description}}</div>{{/if}}
+        <ul>
+          {{#achievements}}<li>{{.}}</li>{{/achievements}}
+        </ul>
+        {{#if:tech_stack}}
+        <div class="entry-tags">{{#tech_stack}}<span>{{.}}</span>{{/tech_stack}}</div>
+        {{/if}}
+      </div>
+      {{/project_experience}}
+    </section>
+    {{/if}}
+
+    {{#if:education}}
+    <section class="block">
+      <h2>教育背景</h2>
+      {{#education}}
+      <div class="edu">
+        <div>
+          <div class="edu-main">{{school}}</div>
+          <div class="edu-sub">{{degree}}{{#if:major}} · {{major}}{{/if}}</div>
+        </div>
+        <div class="edu-right">
+          <div class="edu-time">{{start_date}} — {{end_date}}</div>
+          {{#if:gpa}}<div class="edu-note">GPA {{gpa}}</div>{{/if}}
+        </div>
+      </div>
+      {{/education}}
+    </section>
+    {{/if}}
+
+    {{#if:awards}}
+    <section class="block">
+      <h2>荣誉奖项</h2>
+      <div class="grid-2">
+        {{#awards}}
+        <div class="mini-card">
+          <div class="mc-title">{{name}}</div>
+          <div class="mc-sub">{{#if:issuer}}{{issuer}} · {{/if}}{{date}}</div>
+        </div>
+        {{/awards}}
+      </div>
+    </section>
+    {{/if}}
+
+    {{#if:training}}
+    <section class="block">
+      <h2>培训经历</h2>
+      {{#training}}
+      <div class="exp">
+        <div class="exp-head">
+          <span class="exp-title">{{name}}</span>
+          <span class="exp-time">{{date}}</span>
+        </div>
+        <div class="exp-sub">{{institution}}</div>
+      </div>
+      {{/training}}
+    </section>
+    {{/if}}
+  </main>
+</div>
+</body>
+</html>
+

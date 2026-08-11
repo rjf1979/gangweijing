@@ -3,12 +3,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import { createPgStore } from './db.js';
+import { SAMPLE_RESUME } from './resumeTemplates/sampleResume.js';
+import { BUILTIN_TEMPLATE_META } from './resumeTemplates/builtin-meta.js';
 
 const app = express();
 const root = path.resolve('.');
 const webDist = path.join(root, 'dist');
 const store = createPgStore();
 await store.init();
+// 内置简历模板种子（仅当不存在或来源为 builtin 时同步，不覆盖 AI/人工编辑）
+try {
+  const seeded = await store.seedBuiltinResumeTemplates();
+  console.log(`内置简历模板已同步：${seeded.imported} 套${seeded.skipped ? `，跳过 AI/人工模板 ${seeded.skipped} 套` : ''}`);
+} catch (error) {
+  console.error('内置简历模板同步失败：', error.message);
+}
 
 // 用户端上传的简历原文件目录（用户端默认在 src/frontend/server/.runtime 下，可用 FRONTEND_DATA_DIR 覆盖）
 const frontendDataDir = path.resolve(process.env.FRONTEND_DATA_DIR || '../../frontend/server/.runtime');
@@ -83,6 +92,53 @@ async function requireAdmin(req, res, next) {
   next();
 }
 
+// ===== AI 调用（简历模板 AI 重新生成用） =====
+// 凭证优先级：模型绑定 Key > 当前使用 Key > 环境变量；Base URL 同理由 Key 提供
+async function resolveAiModel(modelType = 'text') {
+  try { const row = await store.getDefaultAiModel(modelType); if (row) return row; } catch (error) { console.error('读取默认 AI 模型失败：', error.message); }
+  return null;
+}
+async function resolveAiCredential(model) {
+  if (model?.apiKeyId) {
+    try {
+      const bound = await store.getAiKeyById(model.apiKeyId);
+      if (bound && bound.enabled && bound.apiKey) return { apiKey: bound.apiKey, baseUrl: (bound.baseUrl || '').replace(/\/+$/, '') || null };
+    } catch (error) { console.error('读取模型绑定 Key 失败：', error.message); }
+  }
+  try {
+    const def = await store.getDefaultAiKey();
+    if (def && def.enabled && def.apiKey) return { apiKey: def.apiKey, baseUrl: (def.baseUrl || '').replace(/\/+$/, '') || null };
+  } catch (error) { console.error('读取当前使用 Key 失败：', error.message); }
+  return { apiKey: process.env.OPENAI_API_KEY || '', baseUrl: null };
+}
+async function callAi(baseUrl, path, body, apiKey, timeoutMs = 120000) {
+  const base = (baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
+  const response = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+  });
+  if (!response.ok) {
+    let message = `AI 接口返回 ${response.status}`;
+    try { const data = await response.json(); message = data?.error?.message || message; } catch {}
+    throw new Error(message);
+  }
+  return response.json();
+}
+const extractAiText = payload => {
+  if (!payload) return '';
+  if (Array.isArray(payload.output)) {
+    return payload.output
+      .map(item => item?.content)
+      .filter(Boolean)
+      .map(part => (Array.isArray(part) ? part.map(c => c?.text || '').join('') : String(part)))
+      .join('');
+  }
+  if (payload.choices?.[0]?.message?.content) return String(payload.choices[0].message.content);
+  if (payload.choices?.[0]?.text) return String(payload.choices[0].text);
+  return '';
+};
 const parsePage = value => {
   const page = Math.max(1, parseInt(value, 10) || 1);
   const pageSize = Math.min(100, Math.max(1, parseInt(process.env.ADMIN_PAGE_SIZE, 10) || 20));
@@ -406,6 +462,7 @@ app.get('/api/admin/settings', requireAdmin, async (req, res) => {
       resend_api_key_masked: maskSecret(settings.resend_api_key),
       email_from: settings.email_from || null,
       analysis_concurrency: settings.analysis_concurrency ?? 2,
+      ai_call_timeout_seconds: settings.ai_call_timeout_seconds ?? 300,
       updated_at: settings.updated_at,
     } : null,
     admins: admins.map(publicAdmin),
@@ -434,6 +491,11 @@ app.put('/api/admin/settings', express.json(), requireAdmin, async (req, res) =>
     const n = parseInt(req.body.analysisConcurrency, 10);
     if (!Number.isFinite(n) || n < 1 || n > 10) return res.status(400).json({ error: '分析并发数需为 1-10 的整数。' });
     patch.analysisConcurrency = n;
+  }
+  if ('aiCallTimeoutSeconds' in req.body) {
+    const n = parseInt(req.body.aiCallTimeoutSeconds, 10);
+    if (!Number.isFinite(n) || n < 30 || n > 3600) return res.status(400).json({ error: '接口调用超时需为 30-3600 秒。' });
+    patch.aiCallTimeoutSeconds = n;
   }
 
   // 邮件配置（Resend）：同上
@@ -686,6 +748,312 @@ app.post('/api/admin/ai-models/fetch', requireAdmin, async (req, res) => {
     .filter(Boolean);
   const saved = await store.replaceReferencePrices(models, fetchedAt);
   res.json({ ...referencePayload(models, fetchedAt), saved: saved.count });
+});
+
+// ===== 简历模板（内置 / AI 生成 / 人工编辑） =====
+const RESUME_TEMPLATE_FIELDS = `可用字段（模板中禁止出现示例数据，所有内容必须来自占位符）：
+basic（已展开到顶层，直接写 {{name}}）：name, gender, birth_year, phone, email, location, current_company, current_title, years_of_experience, expected_salary, job_intention, available_date
+summary / self_evaluation
+skills.technical[] / skills.tools[] / skills.soft[] / skills.languages[]（数组字段自动用「、」连接）
+work_experience[]：company, title, start_date, end_date, industry, responsibilities[], achievements[], skills_used[]
+project_experience[]：name, role, start_date, end_date, description, achievements[], tech_stack[]
+education[]：school, degree, major, start_date, end_date, gpa, honors[]
+certificates[] / awards[] / interests[]（字符串数组）
+training[]：name, institution, date, description
+languages[]：language, fluency
+portfolio[]：name, url, description
+open_source[]：name, url, description
+publications[]：title, journal, date, authors
+references[]：name, company, title, contact`;
+
+const buildResumeTemplatePrompt = ({ name, description, styleNote }) => `你是资深中文简历排版设计师。请为「${name}」设计一套可直接用于 A4 打印的精美 HTML 简历模板。
+${description ? `模板定位：${description}
+` : ''}${styleNote ? `本次风格要求：${styleNote}
+` : ''}
+硬性要求：
+1. 输出一个完整 HTML 文档（<!DOCTYPE html> 到 </html>），包含 <meta charset="UTF-8"> 与内联 <style>，不引用任何外部资源（字体、图片、CDN、JS 库一律禁用）。
+2. A4 尺寸（210mm 宽、最小高度 297mm），做好打印优化（print-color-adjust / @media print），字体使用系统中文字体栈。
+3. 全中文界面，排版要体现该行业的气质：配色、字体层次、分区装饰、留白都要像专业设计师出品，不要像默认浏览器模板。
+4. 数据一律使用占位符语法，禁止写死任何示例内容：
+   - {{字段}} 取字段值，支持点路径（如 {{company}}）；数组字段自动用「、」连接
+   - 数组循环：{{#字段名}}...{{/字段名}}，块内使用该数组元素的子字段占位符
+   - 空值兜底：{{^字段名}}...{{/字段名}}
+   - 条件显示：{{#if:字段名}}...{{/if}}
+5. ${RESUME_TEMPLATE_FIELDS}
+6. 输出直接返回 HTML 文本本身：不要用 \`\`\` 代码块包裹，不要输出任何解释、注释或 Markdown。`;
+
+app.get('/api/admin/resume-templates', requireAdmin, async (req, res) => {
+  const templates = await store.listResumeTemplates();
+  const byOcc = new Map();
+  for (const t of templates) {
+    if (!byOcc.has(t.occupationId)) byOcc.set(t.occupationId, []);
+    byOcc.get(t.occupationId).push(t);
+  }
+  const order = ['tech', 'product', 'sales', 'finance', 'design', 'functional', 'medical', 'entry', 'management', 'general'];
+  const occupations = [];
+  const seen = new Set();
+  for (const occId of [...order, ...[...byOcc.keys()]]) {
+    if (seen.has(occId)) continue;
+    seen.add(occId);
+    const list = byOcc.get(occId) || [];
+    const meta = BUILTIN_TEMPLATE_META[occId] || {};
+    const builtinFile = path.join(root, 'resumeTemplates', 'builtin', occId + '.html');
+    occupations.push({
+      occupationId: occId,
+      name: meta.name || occId,
+      description: meta.description || '',
+      hasBuiltin: fs.existsSync(builtinFile),
+      defaultId: (list.find(t => t.isDefault) || {}).id || null,
+      templates: list.map(t => ({
+        id: t.id,
+        name: t.name,
+        source: t.source,
+        isDefault: t.isDefault,
+        htmlLength: String(t.html || '').length,
+        updatedAt: iso(t.updatedAt),
+      })),
+    });
+  }
+  res.json({
+    occupations,
+    templates: occupations.flatMap(o => o.templates),
+  });
+});
+
+// 手动新增模板：按职业创建一套全新模板（source='manual'，不覆盖现有模板，不抢默认标记）
+app.post('/api/admin/resume-templates', express.json({ limit: '5mb' }), requireAdmin, async (req, res) => {
+  const occupationId = String(req.body?.occupationId || '').trim();
+  const meta = BUILTIN_TEMPLATE_META[occupationId];
+  if (!meta) return res.status(404).json({ error: '该职业不存在。' });
+  const html = typeof req.body?.html === 'string' ? req.body.html.trim() : '';
+  if (!html) return res.status(400).json({ error: '请粘贴或输入模板 HTML 内容。' });
+  if (html.length > 1024 * 1024) return res.status(400).json({ error: '模板内容过大（超过 1MB）。' });
+  const now = new Date();
+  const pad2 = n => String(n).padStart(2, '0');
+  const ts = `${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+  const userProvidedName = String(req.body?.name || '').trim().slice(0, 120);
+  const name = userProvidedName || `${meta.name} · 手动版 ${ts}`;
+  const description = String(req.body?.description || '').trim().slice(0, 500);
+  const id = 'manual-' + occupationId + '-' + crypto.randomBytes(4).toString('hex');
+  const created = await store.upsertResumeTemplate({
+    id,
+    occupationId,
+    name,
+    description,
+    html,
+    source: 'manual',
+    isDefault: false,
+  });
+  res.json({ ok: true, template: { id: created.id, occupationId: created.occupationId, name: created.name, description: created.description, source: 'manual', isDefault: false, html: created.html, updatedAt: iso(created.updatedAt) } });
+});
+
+// 示例数据（预览渲染用；注意必须先于 /:id 注册）
+app.get('/api/admin/resume-templates/sample-data', requireAdmin, async (req, res) => {
+  res.json({ sample: SAMPLE_RESUME });
+});
+
+// ===== AI 生成任务队列：提交后立即返回，后台按 FIFO 排队逐个生成（关闭弹框/面板不影响执行） =====
+const aiGenJobs = new Map(); // jobId -> job
+const aiGenQueue = [];       // FIFO 待执行 jobId
+let aiGenBusy = false;
+
+const publicGenJob = job => ({
+  id: job.id,
+  occupationId: job.occupationId,
+  occupationName: job.occupationName,
+  styleNote: job.styleNote,
+  status: job.status, // pending | running | done | error
+  createdAt: iso(job.createdAt),
+  startedAt: job.startedAt ? iso(job.startedAt) : null,
+  finishedAt: job.finishedAt ? iso(job.finishedAt) : null,
+  templateId: job.templateId || null,
+  templateName: job.templateName || null,
+  error: job.error || null,
+});
+
+async function runAiGenerateJob(job) {
+  job.status = 'running';
+  job.startedAt = new Date();
+  const meta = BUILTIN_TEMPLATE_META[job.occupationId] || {};
+  const styleNote = job.styleNote || '';
+  try {
+    const active = await resolveAiModel('text');
+    const credential = await resolveAiCredential(active);
+    const callSettings = await store.getSettings();
+    const callTimeoutMs = (Number(callSettings?.ai_call_timeout_seconds) || 300) * 1000;
+    if (!credential.apiKey) throw new Error('尚未配置 AI 接口。请先在「AI 设置」中添加并启用 API Key 与默认模型。');
+    const prompt = buildResumeTemplatePrompt({ name: meta.name, description: meta.description, styleNote });
+    let html;
+    if (active?.apiProtocol === 'responses') {
+      const payload = await callAi(credential.baseUrl, '/responses', { model: active.modelId, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.7 }, credential.apiKey, callTimeoutMs);
+      html = extractAiText(payload);
+    } else if (active) {
+      const payload = await callAi(credential.baseUrl, '/chat/completions', { model: active.modelId, messages: [{ role: 'user', content: prompt }], temperature: 0.7 }, credential.apiKey, callTimeoutMs);
+      html = extractAiText(payload);
+    } else {
+      const payload = await callAi(credential.baseUrl, '/responses', { model: process.env.OPENAI_MODEL || 'gpt-4o-mini', input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.7 }, credential.apiKey, callTimeoutMs);
+      html = extractAiText(payload);
+    }
+    html = String(html || '').trim();
+    html = html.replace(/^```(?:html|xml)?\s*/i, '').replace(/```\s*$/, '').trim();
+    if (!/<!DOCTYPE html>/i.test(html) && !/<html[\s>]/i.test(html)) throw new Error('AI 返回内容不是完整的 HTML 文档，请重试或更换模型。');
+    if (html.length > 1024 * 1024) throw new Error('AI 生成内容过大，请重试。');
+    const now = new Date();
+    const pad2 = n => String(n).padStart(2, '0');
+    const ts = `${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+    const id = 'ai-' + job.occupationId + '-' + crypto.randomBytes(4).toString('hex');
+    const created = await store.upsertResumeTemplate({
+      id,
+      occupationId: job.occupationId,
+      name: `${meta.name} · AI 版 ${ts}`,
+      description: styleNote || meta.description,
+      html,
+      source: 'ai',
+      isDefault: false,
+    });
+    job.templateId = created.id;
+    job.templateName = created.name;
+    job.status = 'done';
+  } catch (error) {
+    job.status = 'error';
+    job.error = (error && error.message) ? error.message : String(error);
+  } finally {
+    job.finishedAt = new Date();
+  }
+}
+
+// 串行执行队列（FIFO）：同一时刻只执行一个 AI 生成任务，连续点击多次会依次排队
+async function processAiQueue() {
+  if (aiGenBusy) return;
+  aiGenBusy = true;
+  try {
+    while (aiGenQueue.length) {
+      const jobId = aiGenQueue[0];
+      const job = aiGenJobs.get(jobId);
+      if (!job) { aiGenQueue.shift(); continue; }
+      try {
+        await runAiGenerateJob(job);
+      } catch (error) {
+        job.status = 'error';
+        job.error = (error && error.message) ? error.message : String(error);
+        job.finishedAt = new Date();
+      }
+      aiGenQueue.shift();
+    }
+  } finally {
+    aiGenBusy = false;
+  }
+}
+
+function createAiGenerateJob(occupationId, styleNote) {
+  const meta = BUILTIN_TEMPLATE_META[occupationId] || {};
+  const job = {
+    id: 'gen-' + crypto.randomBytes(6).toString('hex'),
+    occupationId,
+    occupationName: meta.name || occupationId,
+    styleNote: styleNote || '',
+    status: 'pending',
+    createdAt: new Date(),
+    startedAt: null,
+    finishedAt: null,
+    templateId: null,
+    templateName: null,
+    error: null,
+  };
+  aiGenJobs.set(job.id, job);
+
+  aiGenQueue.push(job.id);
+  // 限制内存任务数量（仅保留最近 50 条历史，防止无界增长）
+  while (aiGenJobs.size > 50) {
+    const oldestId = [...aiGenJobs.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt)[0][0];
+    aiGenJobs.delete(oldestId);
+  }
+  processAiQueue().catch(() => {});
+  return job;
+}
+
+// 查询 AI 生成任务（前端轮询用；?status=running 可只看进行中；服务重启后内存任务丢失返回空）
+app.get('/api/admin/resume-templates/generate-jobs', requireAdmin, async (req, res) => {
+  const statusFilter = String(req.query.status || '').split(',').map(s => s.trim()).filter(Boolean);
+  const jobs = [...aiGenJobs.values()]
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .filter(j => !statusFilter.length || statusFilter.includes(j.status))
+    .map(publicGenJob);
+  res.json({ jobs, queued: aiGenQueue.length });
+});
+
+app.get('/api/admin/resume-templates/generate-jobs/:jobId', requireAdmin, async (req, res) => {
+  const job = aiGenJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: '生成任务不存在或已过期（服务可能已重启）。' });
+  res.json({ job: publicGenJob(job) });
+});
+
+app.get('/api/admin/resume-templates/:id', requireAdmin, async (req, res) => {
+  const t = await store.getResumeTemplate(req.params.id);
+  if (!t) return res.status(404).json({ error: '模板不存在。' });
+  res.json({
+    template: {
+      id: t.id,
+      occupationId: t.occupationId,
+      name: t.name,
+      description: t.description,
+      html: t.html,
+      source: t.source,
+      isDefault: t.isDefault,
+      updatedAt: iso(t.updatedAt),
+    },
+  });
+});
+
+app.put('/api/admin/resume-templates/:id', express.json({ limit: '5mb' }), requireAdmin, async (req, res) => {
+  const t = await store.getResumeTemplate(req.params.id);
+  if (!t) return res.status(404).json({ error: '模板不存在。' });
+  const html = typeof req.body?.html === 'string' ? req.body.html.trim() : '';
+  if (!html) return res.status(400).json({ error: '模板内容不能为空。' });
+  if (html.length > 1024 * 1024) return res.status(400).json({ error: '模板内容过大（超过 1MB）。' });
+  const name = String(req.body?.name ?? (t.name || '')).trim().slice(0, 120);
+  const description = String(req.body?.description ?? (t.description || '')).trim().slice(0, 500);
+  const updated = await store.updateResumeTemplate(t.id, { name, description, html, source: 'manual' });
+  res.json({ ok: true, template: { id: updated.id, occupationId: updated.occupationId, name: updated.name, description: updated.description, source: updated.source, isDefault: updated.isDefault, updatedAt: iso(updated.updatedAt) } });
+});
+
+// AI 生成新排版：提交后立即返回 jobId，后台 FIFO 队列逐个生成（source='ai'，不覆盖现有模板）；关闭弹框/面板不影响任务继续
+app.post('/api/admin/resume-templates/:occupationId/generate', express.json({ limit: '5mb' }), requireAdmin, async (req, res) => {
+  const occupationId = req.params.occupationId;
+  const meta = BUILTIN_TEMPLATE_META[occupationId];
+  if (!meta) return res.status(404).json({ error: '该职业不存在。' });
+  const styleNote = String(req.body?.styleNote || '').trim().slice(0, 300);
+  try {
+    const active = await resolveAiModel('text');
+    const credential = await resolveAiCredential(active);
+    if (!credential.apiKey) return res.status(503).json({ error: '尚未配置 AI 接口。请先在「AI 设置」中添加并启用 API Key 与默认模型。' });
+  } catch (error) {
+    return res.status(503).json({ error: `AI 配置读取失败：${error.message}` });
+  }
+  const job = createAiGenerateJob(occupationId, styleNote);
+  res.json({ ok: true, jobId: job.id, status: job.status, queued: aiGenQueue.length });
+});
+
+// 恢复内置：按职业从 builtin/<occupationId>.html 重新导入（无论当前来源）
+app.post('/api/admin/resume-templates/:occupationId/reset', requireAdmin, async (req, res) => {
+  const restored = await store.restoreBuiltinResumeTemplate(req.params.occupationId);
+  if (!restored) return res.status(404).json({ error: '该职业没有对应的内置模板，无法恢复。' });
+  res.json({ ok: true, template: { id: restored.id, occupationId: restored.occupationId, name: restored.name, source: restored.source, html: restored.html, isDefault: restored.isDefault, updatedAt: iso(restored.updatedAt) } });
+});
+
+// 设置该职业默认模板（同一职业仅一套默认）
+app.post('/api/admin/resume-templates/:id/set-default', requireAdmin, async (req, res) => {
+  const t = await store.setDefaultResumeTemplate(req.params.id);
+  if (!t) return res.status(404).json({ error: '模板不存在。' });
+  res.json({ ok: true, template: { id: t.id, occupationId: t.occupationId, name: t.name, source: t.source, isDefault: true, updatedAt: iso(t.updatedAt) } });
+});
+
+// 删除某套模板（删除默认时自动补位为该职业最早一套；内置模板删除后下次启动自动重建）
+app.delete('/api/admin/resume-templates/:id', requireAdmin, async (req, res) => {
+  const t = await store.getResumeTemplate(req.params.id);
+  if (!t) return res.status(404).json({ error: '模板不存在。' });
+  await store.deleteResumeTemplate(req.params.id);
+  res.json({ ok: true });
 });
 
 // ===== 404 处理 =====

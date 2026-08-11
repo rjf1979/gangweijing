@@ -110,4 +110,44 @@ export const api = {
     }
     setTimeout(() => URL.revokeObjectURL(url), 120000)
   },
+
+  // ===== 简历模板（多套管理 / 预览 / 编辑 / AI 生成 / 设为默认 / 恢复内置） =====
+  async listResumeTemplates() {
+    const data = await request('/resume-templates')
+    return data.occupations || []
+  },
+  async getResumeTemplate(id) {
+    const data = await request(`/resume-templates/${id}`)
+    return data.template
+  },
+  async getResumeTemplateSample() {
+    const data = await request('/resume-templates/sample-data')
+    return data.sample || {}
+  },
+  async saveResumeTemplate(id, { name, description, html }) {
+    return request(`/resume-templates/${id}`, { method: 'PUT', body: JSON.stringify({ name, description, html }) })
+  },
+  async createResumeTemplate({ occupationId, name, description, html }) {
+    return request(`/resume-templates`, { method: 'POST', body: JSON.stringify({ occupationId, name, description, html }) })
+  },
+  async generateResumeTemplate(occupationId, { styleNote } = {}) {
+    return request(`/resume-templates/${occupationId}/generate`, { method: 'POST', body: JSON.stringify({ styleNote }) })
+  },
+  async listGenerateJobs() {
+    const data = await request('/resume-templates/generate-jobs')
+    return data.jobs || []
+  },
+  async getGenerateJob(jobId) {
+    const data = await request(`/resume-templates/generate-jobs/${jobId}`)
+    return data.job
+  },
+  async setDefaultResumeTemplate(id) {
+    return request(`/resume-templates/${id}/set-default`, { method: 'POST' })
+  },
+  async resetResumeTemplate(occupationId) {
+    return request(`/resume-templates/${occupationId}/reset`, { method: 'POST' })
+  },
+  async deleteResumeTemplate(id) {
+    return request(`/resume-templates/${id}`, { method: 'DELETE' })
+  },
 }
