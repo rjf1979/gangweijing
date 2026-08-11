@@ -41,3 +41,5 @@ Desktop.ini
 
 # 简历模板参考（大体积，不入库）
 docs/references/
+# Local ops scripts (may contain server credentials, keep out of repo)
+scripts/

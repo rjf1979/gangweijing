@@ -1,4 +1,4 @@
-﻿# 岗位镜（gangweijing）
+# 岗位镜（gangweijing）
 
 AI 求职材料审阅工具：上传简历 → 确认事实 → 上传岗位图分析 → 生成/分享报告。
 
@@ -9,7 +9,8 @@ candidate-fit-tool/
 ├── src/                 # 代码区域
 │   ├── admin/           # 管理端应用：admin/server（后端）+ admin/web（前端）
 │   └── frontend/        # 用户端应用：frontend/server（核心后端）+ frontend/web（前端）
-├── docs/                # 产品与开发文档（多端方案、UI 改造、产品流程等）
+├── docs/                # 全部文档（产品/开发计划/UI 改造/人工验收 MANUAL_ACCEPTANCE.md 等）
+├── scripts/             # 本地运维脚本（含服务器凭据，不入库，见 .gitignore）
 └── .codex/              # 项目记忆（memory/）
 ```
 
@@ -57,6 +58,7 @@ cd src/admin/web    && npm install && npm run dev                           # �
 
 ## 文档（docs/）
 
+- MANUAL_ACCEPTANCE.md — 人工确认清单（验收清单）
 - MULTI_PLATFORM_PLAN.md — 多端混合演进方案
 - UI_REDESIGN_PLAN.md — Neo-brutalist UI 改造计划
 - DEVELOPMENT_PLAN.md / PRODUCT_FLOWS.md — 开发计划与产品流程
