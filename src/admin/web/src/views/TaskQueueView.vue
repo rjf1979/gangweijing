@@ -4,7 +4,7 @@
     <div class="tq-head card">
       <div class="tq-head-left">
         <h2 class="card-title">任务列表</h2>
-        <p class="tq-head-desc">统一查看前后端所有长任务的处理情况（AI 模板生成、报告生成、简历解析、截图识别、简历结构化），状态实时同步。存在排队中或执行中的任务时每 4 秒自动刷新。</p>
+        <p class="tq-head-desc">统一查看前后端所有长任务的处理情况（AI 模板生成、报告生成、简历解析、截图识别、简历结构化），状态实时同步。开启「自动刷新」（默认开启）后每 4 秒自动同步任务状态。</p>
       </div>
       <div class="tq-head-actions">
         <button class="btn btn-ghost btn-sm" type="button" :disabled="loading" @click="loadAll(true)">
@@ -77,7 +77,7 @@
           @keyup.enter="loadJobs(true)"
           @search="loadJobs(true)"
         />
-        <label class="auto-toggle" title="存在排队中或执行中任务时自动每 4 秒刷新">
+        <label class="auto-toggle" title="每 4 秒自动刷新任务状态">
           <input v-model="autoRefresh" type="checkbox" />
           <span>自动刷新</span>
         </label>
@@ -143,14 +143,14 @@
           <span class="cell-muted">第 {{ page }} / {{ totalPages || 1 }} 页</span>
           <button class="btn btn-ghost btn-sm" type="button" :disabled="page >= totalPages || loading" @click="changePage(page + 1)">下一页</button>
         </div>
-        <span v-if="hasActive" class="live-tip"><span class="live-dot" aria-hidden="true"></span>自动刷新中</span>
+        <span v-if="autoRefresh" class="live-tip"><span class="live-dot" aria-hidden="true"></span>自动刷新中</span>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AppIcon from '../components/AppIcon.vue'
 import { api } from '../api'
 
@@ -248,6 +248,7 @@ async function loadStats() {
   } catch (error) {
     // 统计失败不阻塞列表
   }
+  syncPolling()
 }
 
 async function loadJobs(manual = false) {
@@ -269,17 +270,22 @@ async function loadJobs(manual = false) {
   } finally {
     loading.value = false
     refreshing.value = false
-    syncPolling()
   }
 }
 
 async function loadAll(manual = false) {
   await Promise.all([loadStats(), loadJobs(manual)])
+  syncPolling()
 }
 
+let polling = false
 function startPolling() {
   if (timer) return
-  timer = setInterval(() => { loadStats(); loadJobs() }, 4000)
+  timer = setInterval(() => {
+    if (polling) return
+    polling = true
+    Promise.all([loadStats(), loadJobs()]).finally(() => { polling = false })
+  }, 4000)
 }
 function stopPolling() {
   if (timer) {
@@ -288,7 +294,7 @@ function stopPolling() {
   }
 }
 function syncPolling() {
-  if (autoRefresh.value && hasActive.value) startPolling()
+  if (autoRefresh.value) startPolling()
   else stopPolling()
 }
 
@@ -322,6 +328,8 @@ async function clearHistory() {
     errorMsg.value = error.message
   }
 }
+
+watch(autoRefresh, () => syncPolling())
 
 onMounted(() => {
   loadAll()
