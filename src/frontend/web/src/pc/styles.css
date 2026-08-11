@@ -654,6 +654,58 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
 .resume-actions { display: flex; gap: var(--space-3); align-items: center; }
 .fine { color: var(--color-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .resume-document { margin-top: var(--space-5); padding: clamp(28px, 7vw, 64px); border: var(--border-strong); border-radius: var(--radius-sm); background: var(--color-surface); box-shadow: var(--shadow-hard-md); }
+.resume-document-template { padding: clamp(14px, 4vw, 32px); }
+.resume-view-switch {
+  display: inline-flex;
+  margin-top: var(--space-4);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.resume-view-switch-btn {
+  min-height: 40px;
+  padding: 6px 16px;
+  border: 0;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-weight: 900;
+  cursor: pointer;
+}
+.resume-view-switch-btn + .resume-view-switch-btn { border-left: var(--border-thin); }
+.resume-view-switch-btn:hover { background: var(--color-yellow); }
+.resume-view-switch-btn.active { background: var(--color-lime); }
+
+/* 套用/切换后台生成的简历模板 */
+.template-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding: 10px 12px;
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+}
+.template-switcher-label { font-size: 13px; font-weight: 900; color: var(--color-muted); }
+.template-switcher-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 4px 12px;
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.template-switcher-btn:hover { background: var(--color-yellow); }
+.template-switcher-btn.active { background: var(--color-lime); box-shadow: var(--shadow-hard-tag); }
+.template-switcher-btn .template-tag { min-height: 22px; padding: 1px 8px; font-size: 12px; }
+
 .resume-document pre { max-width: 76ch; margin: 0 auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--color-ink); font: 15px/1.8 Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
 .privacy-note { margin-top: var(--space-2); }
 /* 打印/保存 PDF 前可填写复原的脱敏输入 */
@@ -1198,4 +1250,35 @@ input:focus, textarea:focus, select:focus { box-shadow: var(--shadow-hard-tag); 
   padding: var(--space-4) var(--space-5);
   border-top: var(--border-thin);
   background: var(--color-surface-muted);
+}
+
+
+/* ===== 简历头像卡片（我的简历） ===== */
+.avatar-card { margin: var(--space-4) 0; padding: var(--space-4); }
+.avatar-card-body { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
+.avatar-frame {
+  flex: 0 0 auto;
+  width: 96px;
+  height: 96px;
+  display: grid;
+  place-items: center;
+  border: var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-blue);
+  box-shadow: var(--shadow-hard-xs);
+  overflow: hidden;
+}
+.avatar-frame img.avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar-placeholder { font-size: 42px; line-height: 1; }
+.avatar-card-info { flex: 1 1 260px; min-width: 0; display: grid; gap: var(--space-2); }
+.avatar-card-title { margin: 0; font-size: 18px; font-weight: 900; }
+.avatar-card-hint { margin: 0; }
+.avatar-card-hint code { background: var(--color-surface-muted); padding: 1px 5px; border-radius: var(--radius-sm); font-size: 12px; }
+.avatar-card-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.avatar-file-input { position: absolute; width: 1px; height: 1px; padding: 0; opacity: 0; overflow: hidden; }
+.avatar-upload-btn { cursor: pointer; margin: 0; }
+.avatar-btn-disabled { pointer-events: none; }
+.avatar-progress { font-size: 13px; font-weight: 900; color: var(--color-muted); }
+@media (max-width: 640px) {
+  .avatar-card-body { align-items: flex-start; }
 }

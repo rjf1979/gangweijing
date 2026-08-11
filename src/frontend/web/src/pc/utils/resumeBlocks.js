@@ -447,7 +447,7 @@ function buildGroups(content) {
   return groups
 }
 // 原文按标题切分为头部 + 区块；strict 头部阶段仅接受独立标题行，避免联系行被误判
-function parseRawResume(text) {
+export function parseRawResume(text) {
   const rawLines = String(text || '').split(/\r?\n/)
   const headerLines = []
   const sections = []

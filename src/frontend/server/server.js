@@ -16,10 +16,12 @@ const dataDir = path.join(root, '.runtime');
 const uploadDir = path.join(dataDir, 'uploads');
 const resumeFilesDir = path.join(dataDir, 'resume-files');
 const resumeStagingDir = path.join(resumeFilesDir, '.staging');
+const avatarDir = path.join(dataDir, 'avatar-files');
 const dbPath = path.join(dataDir, 'db.json');
 await fs.mkdir(uploadDir, { recursive: true });
 await fs.mkdir(resumeFilesDir, { recursive: true });
 await fs.mkdir(resumeStagingDir, { recursive: true });
+await fs.mkdir(avatarDir, { recursive: true });
 try { await fs.access(dbPath); } catch { await fs.writeFile(dbPath, JSON.stringify({ users: [], reports: [] })); }
 const dbStore = createPgStore();
 await dbStore.init();
@@ -389,6 +391,7 @@ app.post('/api/register', async (req, res) => {
 });
 app.post('/api/login', async (req, res) => { const { email, password } = req.body; const db = await readDb(); db.sessions ||= []; const user = db.users.find(x => x.email === String(email || '').trim().toLowerCase() && x.passwordHash === hash(password || '')); if (!user) return res.status(401).json({ error: '邮箱或密码不正确。' }); const token = crypto.randomBytes(32).toString('hex'); db.sessions.push({ token, userId: user.id, expiresAt: new Date(Date.now() + 30 * 86400000).toISOString() }); await saveDb(db); res.setHeader('Set-Cookie', sessionCookie(token)); res.json({ user: { id: user.id, email: user.email, emailVerified: Boolean(user.emailVerifiedAt) } }); });
 app.get('/api/session', async (req, res) => { const db = await readDb(); const session = currentSession(req, db); const user = session && db.users.find(x => x.id === session.userId); res.json({ authenticated: Boolean(user), user: user ? { id: user.id, email: user.email, emailVerified: Boolean(user.emailVerifiedAt) } : null }); });
+app.post('/api/logout', async (req, res) => { const db = await readDb(); const session = currentSession(req, db); if (session) { db.sessions = (db.sessions || []).filter(x => x.token !== session.token); await saveDb(db); } res.setHeader('Set-Cookie', 'jm_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({ ok: true }); });
 
 app.get('/api/config', async (req, res) => {
   await refreshAppConfig(); // 每次读取最新后台配置，公告修改后无需重启即生效
@@ -410,7 +413,72 @@ app.post('/api/announcement/ack', async (req, res) => {
 });
 app.post('/api/verification-email', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); if (user.emailVerifiedAt) return res.json({ verified: true }); const elapsed = Date.now() - new Date(user.verificationSentAt || 0).getTime(); if (elapsed < 60000) return res.status(429).json({ error: `请在 ${Math.ceil((60000 - elapsed) / 1000)} 秒后重试。` }); const token = issueVerification(user); await saveDb(db); try { user.verificationMessageId = await sendVerificationEmail(user.email, token); user.verificationEmailStatus = 'sent'; delete user.verificationEmailError; await saveDb(db); res.json({ sent: true }); } catch (error) { user.verificationEmailStatus = 'failed'; user.verificationEmailError = error.message; await saveDb(db); res.status(502).json({ error: `验证邮件发送失败：${error.message}` }); } });
 app.post('/api/verify-email', async (req, res) => { const token = String(req.body?.token || ''); if (!token) return res.status(400).json({ error: '验证链接无效。' }); const db = await readDb(); const tokenHash = verificationHash(token); const user = db.users.find(item => item.emailVerificationTokenHash === tokenHash); if (!user || !user.emailVerificationExpiresAt || new Date(user.emailVerificationExpiresAt) <= new Date()) return res.status(400).json({ error: '验证链接无效或已过期，请重新发送。' }); user.emailVerifiedAt = new Date().toISOString(); delete user.emailVerificationTokenHash; delete user.emailVerificationExpiresAt; delete user.verificationEmailError; user.verificationEmailStatus = 'verified'; await saveDb(db); res.json({ verified: true, email: user.email }); });
-app.get('/api/resume', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); res.json({ hasResume: Boolean(user.resumeText), factsConfirmed: Boolean(user.factsConfirmedAt), text: maskResumePII(user.resumeText || ''), masked: true, maskedFields: user.resumeMaskedFields && user.resumeMaskedFields.length ? user.resumeMaskedFields : detectMaskedFields(maskResumePII(user.resumeText || '')), updatedAt: user.resumeUpdatedAt || user.createdAt, structured: (() => { let st = user.resumeStructured || null; if (st && !st.occupation) st = withOccupation(st, maskResumePII(user.resumeText || '')); return st; })(), structuredAt: user.resumeStructuredAt || null, resumeFile: user.resumeFilePath ? { name: user.resumeFileName || '简历文件', mime: user.resumeFileMime || 'application/octet-stream', size: user.resumeFileSize || 0, uploadedAt: user.resumeFileUploadedAt || null } : null }); });
+app.get('/api/resume', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); res.json({ hasResume: Boolean(user.resumeText), factsConfirmed: Boolean(user.factsConfirmedAt), text: maskResumePII(user.resumeText || ''), masked: true, maskedFields: user.resumeMaskedFields && user.resumeMaskedFields.length ? user.resumeMaskedFields : detectMaskedFields(maskResumePII(user.resumeText || '')), updatedAt: user.resumeUpdatedAt || user.createdAt, structured: (() => { let st = user.resumeStructured || null; if (st && !st.occupation) st = withOccupation(st, maskResumePII(user.resumeText || '')); return st; })(), basic: user.resumeBasic || (user.resumeStructured && user.resumeStructured.basic) || null, structuredAt: user.resumeStructuredAt || null, resumeFile: user.resumeFilePath ? { name: user.resumeFileName || '简历文件', mime: user.resumeFileMime || 'application/octet-stream', size: user.resumeFileSize || 0, uploadedAt: user.resumeFileUploadedAt || null } : null, avatar: user.avatarPath ? { url: '/api/resume/avatar?v=' + encodeURIComponent(user.avatarUpdatedAt || ''), mime: user.avatarMime || 'image/png', updatedAt: user.avatarUpdatedAt || null } : null }); });
+app.get('/api/resume/template', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const maskedText = maskResumePII(user.resumeText || ''); let structured = user.resumeStructured || null; if (!structured || !structured.occupation || !structured.occupation.id) structured = withOccupation(structured || {}, maskedText); const occupation = structured.occupation || null; if (!occupation || !occupation.id) return res.json({ applied: false, occupation: null }); const template = await dbStore.getDefaultResumeTemplate(occupation.id); if (!template) return res.json({ applied: false, occupation }); res.setHeader('Cache-Control', 'private, no-store'); res.json({ applied: true, occupation, template: { id: template.id, name: template.name, description: template.description, html: template.html, source: template.source, isDefault: template.isDefault } }); });
+app.get('/api/resume/templates', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const maskedText = maskResumePII(user.resumeText || ''); let structured = user.resumeStructured || null; if (!structured || !structured.occupation || !structured.occupation.id) structured = withOccupation(structured || {}, maskedText); const occupation = structured.occupation || null; if (!occupation || !occupation.id) return res.json({ applied: false, occupation: null, templates: [] }); const templates = await dbStore.listResumeTemplates(occupation.id); const preferredTemplateId = templates.some(t => t.id === user.preferredTemplateId) ? user.preferredTemplateId : null; res.setHeader('Cache-Control', 'private, no-store'); res.json({ applied: templates.length > 0, occupation, preferredTemplateId, templates: templates.map(t => ({ id: t.id, name: t.name, description: t.description, html: t.html, source: t.source, isDefault: Boolean(t.isDefault) })) }); });
+// 套用模板持久化：用户个人选择覆盖后台默认，供编辑页 / 我的简历统一读取
+app.put('/api/resume/template', async (req, res) => { const db = await readDb(); const user = currentUser(req, db); if (!user) return res.status(401).json({ error: '请先登录。' }); const templateId = String(req.body?.templateId || '').trim(); if (!templateId) return res.status(400).json({ error: '请选择要套用的模板。' }); const maskedText = maskResumePII(user.resumeText || ''); let structured = user.resumeStructured || null; if (!structured || !structured.occupation || !structured.occupation.id) structured = withOccupation(structured || {}, maskedText); const occupation = structured.occupation || null; if (!occupation || !occupation.id) return res.status(400).json({ error: '尚未识别职业，无法套用模板。' }); const templates = await dbStore.listResumeTemplates(occupation.id); if (!templates.some(t => t.id === templateId)) return res.status(404).json({ error: '模板不存在或不属于当前职业。' }); user.preferredTemplateId = templateId; await saveDb(db); res.setHeader('Cache-Control', 'private, no-store'); res.json({ ok: true, templateId, occupationId: occupation.id }); });
+
+// ---------- 头像：上传/删除/读取（app_users.avatar_path），模板渲染可用 {{avatar}} 占位符 ----------
+const AVATAR_EXTS = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif' };
+const avatarExt = mime => AVATAR_EXTS[mime] || '.png';
+const AVATAR_MAX = 5 * 1024 * 1024;
+
+app.post('/api/resume/avatar', upload.single('avatar'), async (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: '请选择要上传的头像图片。' });
+  const cleanup = () => fs.unlink(file.path).catch(() => {});
+  if (!file.mimetype || !String(file.mimetype).startsWith('image/')) { await cleanup(); return res.status(400).json({ error: '仅支持图片格式（JPG / PNG / WebP / GIF）。' }); }
+  if (file.size > AVATAR_MAX) { await cleanup(); return res.status(400).json({ error: '头像图片不能超过 5MB。' }); }
+  const db = await readDb();
+  const user = currentUser(req, db);
+  if (!user) { await cleanup(); return res.status(401).json({ error: '请先登录。' }); }
+  const id = crypto.randomUUID();
+  const userDir = path.join(avatarDir, user.id);
+  await fs.mkdir(userDir, { recursive: true });
+  const ext = avatarExt(file.mimetype);
+  const target = path.join(userDir, id + ext);
+  await fs.rename(file.path, target).catch(async () => { await fs.copyFile(file.path, target); await cleanup(); });
+  const oldAbs = user.avatarPath ? path.join(dataDir, user.avatarPath) : null;
+  user.avatarPath = 'avatar-files/' + user.id + '/' + id + ext;
+  user.avatarMime = file.mimetype;
+  user.avatarUpdatedAt = new Date().toISOString();
+  if (oldAbs && oldAbs !== target) await fs.rm(oldAbs, { force: true }).catch(() => {});
+  await saveDb(db);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({ ok: true, avatar: { url: '/api/resume/avatar?v=' + encodeURIComponent(user.avatarUpdatedAt), mime: user.avatarMime, updatedAt: user.avatarUpdatedAt } });
+});
+
+app.delete('/api/resume/avatar', async (req, res) => {
+  const db = await readDb();
+  const user = currentUser(req, db);
+  if (!user) return res.status(401).json({ error: '请先登录。' });
+  if (user.avatarPath) {
+    await fs.rm(path.join(dataDir, user.avatarPath), { force: true }).catch(() => {});
+    user.avatarPath = null;
+    user.avatarMime = null;
+    user.avatarUpdatedAt = null;
+    await saveDb(db);
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({ ok: true });
+});
+
+app.get('/api/resume/avatar', async (req, res) => {
+  const db = await readDb();
+  const user = currentUser(req, db);
+  if (!user) return res.status(401).json({ error: '请先登录。' });
+  if (!user.avatarPath) return res.status(404).json({ error: '尚未上传头像。' });
+  const abs = path.join(dataDir, user.avatarPath);
+  try {
+    const stat = await fs.stat(abs);
+    if (!stat.isFile()) return res.status(404).json({ error: '头像文件不存在。' });
+  } catch { return res.status(404).json({ error: '头像文件不存在。' }); }
+  res.setHeader('Content-Type', user.avatarMime || 'application/octet-stream');
+  res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+  res.sendFile(abs, { dotfiles: 'allow' });
+});
+
 const FILE_REF_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isSafeFileRef = value => typeof value === 'string' && FILE_REF_RE.test(value);
 async function readStagingMeta(fileRef) {
@@ -484,6 +552,9 @@ app.put('/api/resume', async (req, res) => {
       structuredError = error.message;
     }
   }
+  // 基础信息拆解为独立字段保存（姓名/性别/出生年月/电话/邮箱/所在地等），前端编辑页与模板渲染按字段读取
+  const basicObj = (user.resumeStructured && user.resumeStructured.basic && typeof user.resumeStructured.basic === 'object') ? user.resumeStructured.basic : null;
+  user.resumeBasic = basicObj && Object.keys(basicObj).length ? basicObj : null;
   await saveDb(db);
   res.json({ saved: true, masked: true, maskedFields: user.resumeMaskedFields || [], hasResumeFile: Boolean(user.resumeFilePath), structured: Boolean(user.resumeStructured), structuredError });
 });

@@ -82,6 +82,18 @@ export function clearSession() {
   store.email = ''
 }
 
+// 退出登录：通知服务端删除会话并清 cookie，随后清理本地状态与草稿
+export async function logout() {
+  try {
+    await api.post('/api/logout')
+  } catch {
+    // 网络异常也继续本地清理，避免用户被卡在登录态
+  }
+  clearSession()
+  try { sessionStorage.removeItem(DRAFT_KEY) } catch { /* 隐私模式等无法写入时静默降级 */ }
+  try { store.draft = {} } catch { /* 忽略 */ }
+}
+
 export function maskedEmail(value) {
   const [name, domain = ''] = String(value || '').split('@')
   return name ? `${name.slice(0, 2)}***@${domain}` : ''

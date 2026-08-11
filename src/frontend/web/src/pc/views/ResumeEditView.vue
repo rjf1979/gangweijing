@@ -10,342 +10,243 @@
     <p class="fine">{{ meta }}</p>
     <template v-if="hasResume">
       <div class="neo-alert neo-alert-info edit-template-banner">
-        <strong>正在按「{{ occupationName }}」模板编辑</strong>
-        <p v-if="templateDescription">{{ templateDescription }}</p>
+        <strong>按所套用模板的字段结构编辑</strong>
+        <p>基础信息已拆解为独立字段保存；各区块按字段对号入座填写，数据实时套用到当前模板预览。切换模板后字段表单自动补齐该模板用到的区块。</p>
       </div>
-      <p class="fine privacy-note">✏️ 保存后简历将按该行业模板的区块顺序重新组织；手机号 / 邮箱等隐私仍自动脱敏，不会明文保存。</p>
+
+      <div v-if="templateList.length" class="template-switcher edit-template-switcher" role="group" aria-label="选择套用的简历模板">
+        <span class="template-switcher-label">套用模板：</span>
+        <button
+          v-for="t in templateList"
+          :key="t.id"
+          type="button"
+          class="template-switcher-btn"
+          :class="{ active: currentTemplateId === t.id }"
+          @click="selectTemplate(t)"
+        >
+          {{ t.name || t.id }}
+          <span v-if="t.isDefault" class="neo-tag neo-tag-lime template-tag">默认</span>
+          <span v-else class="neo-tag neo-tag-blue template-tag">{{ sourceLabel(t.source) }}</span>
+        </button>
+      </div>
+
       <form class="edit-form" @submit.prevent="save">
-        <article v-for="sec in sections" :key="sec.id" class="edit-section neo-panel">
+        <article class="edit-section neo-panel">
+          <header class="edit-section-head">
+            <h2>基本信息</h2>
+            <span class="neo-tag neo-tag-lime">独立字段保存</span>
+          </header>
+          <div class="edit-fields basic-grid">
+            <div v-for="f in BASIC_FIELDS" :key="f.key" class="field-block">
+              <label :for="'f_basic_' + f.key">{{ f.label }}</label>
+              <input :id="'f_basic_' + f.key" v-model.trim="form.basic[f.key]" :placeholder="f.placeholder" type="text" />
+            </div>
+          </div>
+        </article>
+
+        <article v-for="(sec, i) in form.sections" :key="sec._key" class="edit-section neo-panel">
           <header class="edit-section-head">
             <h2>{{ sec.title }}</h2>
-            <span v-if="sec.required" class="neo-tag neo-tag-lime">模板必填</span>
+            <span class="section-actions">
+              <button type="button" class="text-button" :disabled="i === 0" @click="moveSection(i, -1)">上移</button>
+              <button type="button" class="text-button" :disabled="i === form.sections.length - 1" @click="moveSection(i, 1)">下移</button>
+              <button type="button" class="text-button danger" @click="removeSection(i)">删除区块</button>
+            </span>
           </header>
 
-          <div v-if="sec.kind === 'fields'" class="edit-fields">
-            <div class="field-row">
-              <div v-for="f in sec.fieldDefs" :key="f.key" class="field-block">
-                <label :for="'f_' + sec.id + '_' + f.key">{{ f.label }}<span v-if="f.required" class="req">*</span></label>
-                <select v-if="isSelect(f)" :id="'f_' + sec.id + '_' + f.key" v-model="sec.values[f.key]">
-                  <option value=""></option>
-                  <option v-if="sec.values[f.key] && !SELECT_OPTIONS[f.key].includes(sec.values[f.key])" :value="sec.values[f.key]">{{ sec.values[f.key] }}</option>
-                  <option v-for="opt in SELECT_OPTIONS[f.key]" :key="opt" :value="opt">{{ opt }}</option>
-                </select>
-                <input v-else :id="'f_' + sec.id + '_' + f.key" v-model="sec.values[f.key]" :placeholder="f.placeholder || ''" />
-              </div>
+          <div v-if="secType(sec) === 'text'" class="field-block">
+            <label :for="'f_' + sec.id">内容</label>
+            <textarea :id="'f_' + sec.id" v-model.trim="sec.text" rows="5" :placeholder="'填写' + sec.title"></textarea>
+          </div>
+
+          <div v-else-if="secType(sec) === 'object'" class="edit-fields">
+            <div v-for="f in secFields(sec)" :key="f.key" class="field-block">
+              <label :for="'f_' + sec.id + '_' + f.key">{{ f.label }}</label>
+              <input :id="'f_' + sec.id + '_' + f.key" v-model.trim="sec.object[f.key]" type="text" />
             </div>
           </div>
 
-          <div v-else-if="sec.kind === 'text'" class="field-block">
-            <label :for="'f_' + sec.id">{{ sec.title }}</label>
-            <textarea :id="'f_' + sec.id" v-model="sec.text" rows="6" placeholder="填写{{ sec.title }}内容"></textarea>
-          </div>
-
-          <div v-else-if="sec.kind === 'lines'" class="field-block">
-            <label :for="'f_' + sec.id">{{ sec.title }}（每行一条）</label>
-            <textarea :id="'f_' + sec.id" v-model="sec.lines" rows="6" placeholder="每行一条"></textarea>
-          </div>
-
-          <div v-else-if="sec.kind === 'skills'" class="edit-fields">
-            <div v-for="k in SKILL_KEYS" :key="k" class="field-block">
-              <label :for="'f_' + sec.id + '_' + k">{{ SKILL_LABELS[k] }}（每行一条）</label>
-              <textarea :id="'f_' + sec.id + '_' + k" v-model="sec.skills[k]" rows="3" placeholder="每行一条"></textarea>
+          <div v-else-if="secType(sec) === 'skills'" class="edit-fields">
+            <div v-for="l in secLists(sec)" :key="l.key" class="field-block">
+              <label :for="'f_' + sec.id + '_' + l.key">{{ l.label }}（每行一项）</label>
+              <textarea :id="'f_' + sec.id + '_' + l.key" v-model.trim="sec.lists[l.key]" rows="4"></textarea>
             </div>
           </div>
 
-          <div v-else-if="sec.kind === 'items'" class="edit-items">
-            <div v-for="(item, i) in sec.items" :key="item._key" class="edit-item">
-              <div class="edit-item-head">
-                <b>{{ sec.title }} #{{ i + 1 }}</b>
-                <button type="button" class="text-button danger" @click="removeItem(sec, i)">删除</button>
-              </div>
+          <div v-else-if="secType(sec) === 'lines'" class="field-block">
+            <label :for="'f_' + sec.id">{{ sec.title }}（每行一项）</label>
+            <textarea :id="'f_' + sec.id" v-model.trim="sec.lines" rows="5"></textarea>
+          </div>
+
+          <div v-else class="edit-items">
+            <article v-for="(item, j) in sec.items" :key="item._key" class="edit-item">
+              <header class="edit-item-head">
+                <b>{{ itemLabel(sec.id, item.fields) || ('第 ' + (j + 1) + ' 条') }}</b>
+                <span class="section-actions">
+                  <button type="button" class="text-button" :disabled="j === 0" @click="moveItem(sec, j, -1)">上移</button>
+                  <button type="button" class="text-button" :disabled="j === sec.items.length - 1" @click="moveItem(sec, j, 1)">下移</button>
+                  <button type="button" class="text-button danger" @click="removeItem(sec, j)">删除</button>
+                </span>
+              </header>
               <div class="edit-item-body">
-                <div class="field-row">
-                  <div v-for="f in sec.textDefs" :key="f.key" class="field-block">
-                    <label :for="'f_' + sec.id + '_' + f.key + '_' + item._key">{{ f.label }}<span v-if="f.required" class="req">*</span></label>
-                    <select v-if="isSelect(f)" :id="'f_' + sec.id + '_' + f.key + '_' + item._key" v-model="item.values[f.key]">
-                      <option value=""></option>
-                      <option v-if="item.values[f.key] && !SELECT_OPTIONS[f.key].includes(item.values[f.key])" :value="item.values[f.key]">{{ item.values[f.key] }}</option>
-                      <option v-for="opt in SELECT_OPTIONS[f.key]" :key="opt" :value="opt">{{ opt }}</option>
-                    </select>
-                    <input v-else :id="'f_' + sec.id + '_' + f.key + '_' + item._key" v-model="item.values[f.key]" />
+                <div class="edit-fields">
+                  <div v-for="f in secFields(sec)" :key="f.key" class="field-block">
+                    <label :for="'f_' + sec.id + '_' + j + '_' + f.key">{{ f.label }}</label>
+                    <input :id="'f_' + sec.id + '_' + j + '_' + f.key" v-model.trim="item.fields[f.key]" type="text" />
+                  </div>
+                  <div v-for="l in secLists(sec)" :key="l.key" class="field-block">
+                    <label :for="'f_' + sec.id + '_' + j + '_' + l.key">{{ l.label }}（每行一项）</label>
+                    <textarea :id="'f_' + sec.id + '_' + j + '_' + l.key" v-model.trim="item.lists[l.key]" rows="3"></textarea>
                   </div>
                 </div>
-                <div v-for="f in sec.listDefs" :key="f.key" class="field-block">
-                  <label :for="'f_' + sec.id + '_' + f.key + '_' + item._key">{{ f.label }}（每行一条）</label>
-                  <textarea :id="'f_' + sec.id + '_' + f.key + '_' + item._key" v-model="item.lists[f.key]" rows="3" placeholder="每行一条"></textarea>
-                </div>
               </div>
-            </div>
-            <button type="button" class="neo-button neo-button-secondary add-item" @click="addItem(sec)">＋ 添加{{ sec.title }}</button>
+            </article>
+            <button type="button" class="neo-button neo-button-secondary add-item" @click="addItemToSection(sec)">＋ 添加一条</button>
           </div>
         </article>
 
-        <article v-if="protectedSections.length" class="edit-section neo-panel edit-protected">
-          <header class="edit-section-head"><h2>未覆盖内容</h2></header>
-          <p class="fine">以下内容系统未能归入上方区块，保存时会一并保留（如与上方重复可删除）。</p>
-          <div v-for="(p, i) in protectedSections" :key="i" class="field-block">
-            <label :for="'f_protected_' + i">{{ p.title }}</label>
-            <textarea :id="'f_protected_' + i" v-model="p.content" rows="4"></textarea>
-          </div>
-        </article>
-
-        <p class="error" role="alert">{{ error }}</p>
-        <div class="action-row">
-          <router-link class="neo-button neo-button-secondary" to="/my-resume">返回</router-link>
-          <button class="neo-button neo-button-primary" type="submit" :disabled="saving">{{ saving ? '保存中…' : '保存简历' }}</button>
+        <div v-if="availableSections.length" class="edit-actions add-section-bar">
+          <label class="add-section-label" for="add-section-select">添加区块</label>
+          <select id="add-section-select" v-model="addSectionId">
+            <option value="" disabled>选择要添加的区块</option>
+            <option v-for="s in availableSections" :key="s" :value="s">{{ sectionDef(s).title }}</option>
+          </select>
+          <button id="add-section-btn" type="button" class="neo-button neo-button-secondary" :disabled="!addSectionId" @click="appendSection">＋ 添加区块</button>
         </div>
+        <p v-if="error" class="error">{{ error }}</p>
       </form>
+
+      <div v-if="currentTemplate && previewHtml" class="edit-preview">
+        <header class="edit-preview-head">
+          <h2>实时预览（{{ currentTemplate.name || '模板' }}）</h2>
+          <span class="fine">字段编辑后自动对号入座渲染，保存后「我的简历」按该模板展示</span>
+        </header>
+        <div class="template-frame-wrap">
+          <iframe ref="previewFrame" class="template-frame" :title="'预览：' + (currentTemplate.name || '')" :srcdoc="previewHtml" @load="onPreviewLoad"></iframe>
+        </div>
+      </div>
     </template>
     <p v-else class="resume-empty">{{ emptyText }}</p>
   </section>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { showLoading, hideLoading, saveDraft } from '../store'
-import { SECTION_CATALOG, getSectionById, getTemplateById } from '../data/resumeStructureTemplates.js'
-import { normalizeStructured, structuredToText, parseTextSections, sectionIdOfTitle } from '../utils/resumeBlocks.js'
+import { structuredToText } from '../utils/resumeBlocks.js'
+import { renderTemplate } from '../utils/renderTemplate.js'
+import {
+  BASIC_FIELDS, SECTION_ORDER, sectionDef, structuredToForm, formToStructured,
+  inferTemplateFields, sectionHasData, itemLabel, emptySectionForm, addItemToSection,
+} from '../utils/fieldEditor.js'
 
 const router = useRouter()
 
 const hasResume = ref(false)
 const emptyText = ref('')
 const meta = ref('')
-const occupationName = ref('通用 / 综合')
-const templateDescription = ref('')
-const template = ref(null)
-const sections = ref([])
-const protectedSections = ref([])
+const form = ref({ basic: {}, sections: [] })
+const baseStructured = ref(null)
+const templateList = ref([])
+const currentTemplate = ref(null)
 const saving = ref(false)
 const error = ref('')
+const addSectionId = ref('')
+const previewFrame = ref(null)
+const avatarUrl = ref('')
 
-const SKILL_KEYS = ['technical', 'tools', 'soft', 'languages']
-const SKILL_LABELS = { technical: '专业技能', tools: '工具', soft: '软技能', languages: '语言' }
-const SELECT_OPTIONS = {
-  gender: ['男', '女'],
-  job_type: ['全职', '兼职', '实习', '不限'],
-  degree: ['博士', '硕士', '本科', '大专', '中专/高中', '其他'],
+const currentTemplateId = computed(() => (currentTemplate.value ? currentTemplate.value.id : ''))
+
+const availableSections = computed(() => {
+  const existing = new Set(form.value.sections.map(s => s.id))
+  return SECTION_ORDER.filter(id => !existing.has(id))
+})
+
+// 实时预览：表单 → structured → 模板渲染
+const previewHtml = computed(() => {
+  const tpl = currentTemplate.value
+  if (!tpl || !tpl.html || !baseStructured.value) return ''
+  const st = formToStructured(form.value, baseStructured.value)
+  return renderTemplate(tpl.html, { ...st, avatar: avatarUrl.value })
+})
+
+function secType(sec) { const d = sectionDef(sec.id); return d ? d.type : '' }
+function secFields(sec) { const d = sectionDef(sec.id); return (d && d.fields) || [] }
+function secLists(sec) { const d = sectionDef(sec.id); return (d && d.lists) || [] }
+function sourceLabel(source) {
+  if (source === 'ai') return 'AI 生成'
+  if (source === 'manual') return '人工编辑'
+  return '内置'
 }
 
-let uidSeed = 0
-function uid() { uidSeed += 1; return 'item_' + Date.now().toString(36) + '_' + uidSeed }
-
-function splitLines(v) {
-  return String(v || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean)
+function moveSection(i, dir) {
+  const j = i + dir
+  if (j < 0 || j >= form.value.sections.length) return
+  const arr = form.value.sections
+  const tmp = arr[i]
+  arr[i] = arr[j]
+  arr[j] = tmp
 }
 
-function isSelect(f) {
-  return f.type === 'select' && SELECT_OPTIONS[f.key]
+function removeSection(i) {
+  form.value.sections.splice(i, 1)
 }
 
-function hasStructuredData(id, s) {
-  switch (id) {
-    case 'basic': return Object.values(s.basic || {}).some(v => String(v || '').trim())
-    case 'job_intention': return Object.values(s.job_intention || {}).some(v => String(v || '').trim())
-    case 'summary': return Boolean(String(s.summary || '').trim())
-    case 'self_evaluation': return Boolean(String(s.self_evaluation || '').trim())
-    case 'skills': return SKILL_KEYS.some(k => Array.isArray(s.skills?.[k]) && s.skills[k].length > 0)
-    default: return Array.isArray(s[id]) && s[id].length > 0
-  }
-}
-
-function makeSection(def, required, s) {
-  const id = def.id
-  const base = { id, title: def.title, required: Boolean(required), fieldDefs: def.fields || [], kind: 'text' }
-  if (id === 'basic' || id === 'job_intention') {
-    const values = {}
-    for (const f of def.fields || []) {
-      const raw = s[id] && s[id][f.key]
-      values[f.key] = (raw !== undefined && raw !== null) ? String(raw) : ''
-    }
-    return { ...base, kind: 'fields', values }
-  }
-  if (id === 'summary' || id === 'self_evaluation') {
-    return { ...base, kind: 'text', text: String(s[id] || '') }
-  }
-  if (id === 'skills') {
-    const sk = s.skills || {}
-    const skills = {}
-    for (const k of SKILL_KEYS) skills[k] = Array.isArray(sk[k]) ? sk[k].join('\n') : ''
-    return { ...base, kind: 'skills', skills }
-  }
-  if (id === 'certificates' || id === 'awards' || id === 'interests') {
-    return { ...base, kind: 'lines', lines: Array.isArray(s[id]) ? s[id].join('\n') : '' }
-  }
-  const textDefs = (def.fields || []).filter(f => f.type !== 'list')
-  const listDefs = (def.fields || []).filter(f => f.type === 'list')
-  const items = (Array.isArray(s[id]) ? s[id] : []).filter(x => x && typeof x === 'object').map(item => {
-    const values = {}
-    const lists = {}
-    for (const f of textDefs) values[f.key] = (item[f.key] !== undefined && item[f.key] !== null) ? String(item[f.key]) : ''
-    for (const f of listDefs) lists[f.key] = Array.isArray(item[f.key]) ? item[f.key].join('\n') : ''
-    return { _key: uid(), values, lists }
-  })
-  return { ...base, kind: 'items', textDefs, listDefs, items }
-}
-
-function buildEditSections(s) {
-  const occ = (s.occupation && s.occupation.id) ? s.occupation : { id: 'general', name: '通用 / 综合' }
-  const tpl = getTemplateById(occ.id) || getTemplateById('general')
-  const requiredMap = {}
-  for (const x of tpl.structure || []) if (x && x.id) requiredMap[x.id] = Boolean(x.required)
-  const result = []
-  const seen = new Set()
-  const push = (id) => {
-    const def = getSectionById(id)
-    if (!def || seen.has(id)) return
-    result.push(makeSection(def, requiredMap[id], s))
-    seen.add(id)
-  }
-  for (const x of tpl.structure || []) {
-    const id = x && x.id
-    if (id && id !== 'extra') push(id)
-  }
-  // 模板未列出但有数据的区块追加在末尾，保证内容只多不少
-  for (const def of SECTION_CATALOG) {
-    if (def.id === 'extra' || seen.has(def.id)) continue
-    if (hasStructuredData(def.id, s)) push(def.id)
-  }
-  return { occ, tpl, sections: result }
-}
-
-// 从原文页眉行 / 补充信息区块提取基本信息回填 basic，保证纯文本简历保存后姓名/联系方式不丢失
-function fillBasicFromHeader(s, text) {
-  if (!text || !s || (s.basic && Object.values(s.basic).some(v => String(v || '').trim()))) return s
-  const basic = {}
-  const secs = parseTextSections(text)
-  const header = secs.find(x => x.title === null)
-  const extraSec = secs.find(x => x.title && ['补充信息', '附加信息', '其他'].includes(String(x.title).trim()))
-  const lines = [
-    ...(header ? String(header.content || '').split('\n') : []),
-    ...(extraSec ? String(extraSec.content || '').split('\n') : []),
-  ]
-  for (const raw of lines) {
-    const l = raw.trim()
-    if (!l) continue
-    if (!basic.name && !/[:：|]/.test(l) && l.length <= 8) basic.name = l
-    const phone = l.match(/1[3-9]\d\*{4}\d{4}/); if (phone && !basic.phone) basic.phone = phone[0]
-    const email = l.match(/[A-Za-z0-9_+-]\*{1,3}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/); if (email && !basic.email) basic.email = email[0]
-    if (!basic.gender) { const g = l.match(/男|女/); if (g) basic.gender = g[0] }
-    const birth = l.match(/生日[：:]\s*(\d{4})/); if (birth && !basic.birth_year) basic.birth_year = birth[1]
-    const exp = l.match(/工作经验[：:]\s*(\d+)\s*年/); if (exp && !basic.years_of_experience) basic.years_of_experience = exp[1] + '年'
-    if (!basic.location && !/[:：|]/.test(l) && /[\u4e00-\u9fa5]{2,8}(省|市|区|县)/.test(l)) basic.location = l
-  }
-  if (!Object.keys(basic).length) return s
-  return { ...s, basic: { ...(s.basic || {}), ...basic } }
-}
-
-function buildProtected(text, s) {
-  const list = []
-  if (!text) return list
-  const secs = parseTextSections(text)
-  for (const sec of secs) {
-    const content = String(sec.content || '').trim()
-    if (!content) continue
-    if (sec.title === null) {
-      // 页眉行即基本信息（姓名/联系方式等），由 basic 表单维护，不纳入补充信息
-      continue
-    } else {
-      const sid = sectionIdOfTitle(sec.title)
-      if (sid === 'extra') {
-        // 附加/补充信息已在 extra_sections 登记过（round-trip）则跳过，避免每次保存重复追加
-        const registered = (s.extra_sections || []).some(x => String(x && x.content || '').trim() === content)
-        if (!registered) list.push({ title: sec.title, content })
-        continue
-      }
-      const covered = Boolean(sid && hasStructuredData(sid, s))
-      if (!covered) list.push({ title: sec.title, content })
-    }
-  }
-  return list
-}
-
-function collectStructured(s) {
-  const out = JSON.parse(JSON.stringify(s))
-  for (const sec of sections.value) {
-    const id = sec.id
-    if (sec.kind === 'fields') {
-      const values = {}
-      for (const f of sec.fieldDefs) { const v = String(sec.values[f.key] ?? '').trim(); if (v) values[f.key] = v }
-      if (id === 'basic') out.basic = values
-      else if (id === 'job_intention') out.job_intention = values
-    } else if (sec.kind === 'text') {
-      out[id] = String(sec.text || '').trim()
-    } else if (sec.kind === 'skills') {
-      out.skills = {}
-      for (const k of SKILL_KEYS) out.skills[k] = splitLines(sec.skills[k])
-    } else if (sec.kind === 'lines') {
-      out[id] = splitLines(sec.lines)
-    } else if (sec.kind === 'items') {
-      const items = []
-      for (const it of sec.items) {
-        const obj = {}
-        for (const f of sec.textDefs) { const v = String(it.values[f.key] ?? '').trim(); if (v) obj[f.key] = v }
-        for (const f of sec.listDefs) { const arr = splitLines(it.lists[f.key]); if (arr.length) obj[f.key] = arr }
-        if (Object.keys(obj).length) items.push(obj)
-      }
-      out[id] = items
-    }
-  }
-  // 未覆盖内容并入 extra_sections（同标题同内容去重，避免每轮保存重复累积）
-  // 历史遗留的「补充信息」若内容属于基本信息（姓名/电话/邮箱等），不再保留
-  const basicVals = Object.values(out.basic || {}).map(v => String(v || '').trim()).filter(Boolean)
-  const isBasicInfoExtra = (x) => {
-    const c = String(x.content || '').trim()
-    if (!c) return false
-    if (basicVals.some(v => v && c.includes(v))) return true
-    const lines = c.split('\n').map(l => l.trim()).filter(Boolean)
-    if (!lines.length) return false
-    // 每行都是基本信息特征（姓名/脱敏电话/脱敏邮箱/性别/生日/地址/年限）
-    const basicish = (l) => /1[3-9]\d\*{4}\d{4}|[A-Za-z0-9_+-]\*{1,3}@|男|女|生日|工作经验|^\d{4}\s*[年/-]|(省|市|区|县)$/.test(l)
-    return lines.length <= 4 && lines.every(basicish)
-  }
-  const extras = Array.isArray(out.extra_sections) ? out.extra_sections.filter(x => {
-    if (!x || typeof x !== 'object') return false
-    if (String(x.title || '').trim() !== '补充信息') return true
-    return !isBasicInfoExtra(x)
-  }) : []
-  const seen = new Set(extras.map(x => `${x.title || '附加信息'}\u0000${x.content || ''}`))
-  for (const p of protectedSections.value) {
-    const content = String(p.content || '').trim()
-    if (!content) continue
-    const title = String(p.title || '附加信息').trim()
-    if (title === '补充信息' && isBasicInfoExtra({ content })) continue
-    const key = `${title}\u0000${content}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    extras.push({ title, content })
-  }
-  out.extra_sections = extras
-  return out
-}
-
-function addItem(sec) {
-  const values = {}
-  const lists = {}
-  for (const f of sec.textDefs) values[f.key] = ''
-  for (const f of sec.listDefs) lists[f.key] = ''
-  sec.items.push({ _key: uid(), values, lists })
+function moveItem(sec, i, dir) {
+  const j = i + dir
+  if (!sec.items || j < 0 || j >= sec.items.length) return
+  const tmp = sec.items[i]
+  sec.items[i] = sec.items[j]
+  sec.items[j] = tmp
 }
 
 function removeItem(sec, i) {
   sec.items.splice(i, 1)
 }
 
+function appendSection() {
+  if (!addSectionId.value) return
+  form.value.sections.push(emptySectionForm(addSectionId.value))
+  addSectionId.value = ''
+}
+
+// 把模板用到的区块（结构化中还没有的）补进编辑表单，按模板字段结构对号入座
+function mergeTemplateSections(tpl) {
+  if (!tpl || !tpl.html) return
+  const inferred = inferTemplateFields(tpl.html)
+  const existing = new Set(form.value.sections.map(s => s.id))
+  for (const id of inferred.sectionIds) {
+    if (!existing.has(id)) {
+      form.value.sections.push(emptySectionForm(id))
+      existing.add(id)
+    }
+  }
+}
+
+async function selectTemplate(t) {
+  currentTemplate.value = t
+  mergeTemplateSections(t)
+  try {
+    await api.put('/api/resume/template', { templateId: t.id })
+  } catch (err) {
+    console.warn('模板选择保存失败：', err.message)
+  }
+}
+
 async function save() {
   error.value = ''
-  const editedStructured = collectStructured(JSON.parse(JSON.stringify(structuredCache.value)))
-  const text = structuredToText(editedStructured, template.value)
+  const structured = formToStructured(form.value, baseStructured.value)
+  const text = structuredToText(structured, currentTemplate.value)
   if (!text.trim()) {
     error.value = '简历内容不能为空，请至少填写姓名或一段内容。'
     return
   }
   saving.value = true
-  showLoading('正在保存简历', '按行业模板重组并保存')
+  showLoading('正在保存简历', '按模板字段结构保存')
   try {
-    await api.put('/api/resume', { text, structured: editedStructured })
+    await api.put('/api/resume', { text, structured })
     saveDraft({ resumeText: text })
     hideLoading()
     router.push('/my-resume')
@@ -356,12 +257,26 @@ async function save() {
   }
 }
 
-const structuredCache = ref(null)
+async function onPreviewLoad() {
+  await nextTick()
+  const f = previewFrame.value
+  if (!f) return
+  const setHeight = () => {
+    if (f.contentDocument && f.contentDocument.documentElement) {
+      f.style.height = Math.max(f.contentDocument.documentElement.scrollHeight, 500) + 'px'
+    }
+  }
+  setHeight()
+  setTimeout(setHeight, 200)
+}
 
 onMounted(async () => {
   showLoading('正在打开编辑', '读取你的简历')
   try {
-    const data = await api.get('/api/resume')
+    const [data, tpls] = await Promise.all([
+      api.get('/api/resume'),
+      api.get('/api/resume/templates').catch(() => null),
+    ])
     hasResume.value = Boolean(data.hasResume)
     if (!hasResume.value) {
       emptyText.value = '账号中还没有简历，请先上传或粘贴简历。'
@@ -369,15 +284,26 @@ onMounted(async () => {
       return
     }
     meta.value = `最近更新：${new Date(data.updatedAt).toLocaleString('zh-CN')}`
-    let s = normalizeStructured(data.structured)
-    s = fillBasicFromHeader(s, data.text || '')
-    structuredCache.value = s
-    const { occ, tpl, sections: secs } = buildEditSections(s)
-    occupationName.value = occ.name || tpl.name || '通用 / 综合'
-    templateDescription.value = tpl.description || ''
-    template.value = tpl
-    sections.value = secs
-    protectedSections.value = buildProtected(data.text || '', s)
+    baseStructured.value = data.structured || null
+    avatarUrl.value = data.avatar && data.avatar.url ? location.origin + data.avatar.url : ''
+    form.value = structuredToForm(data.structured || null)
+    if (tpls && Array.isArray(tpls.templates) && tpls.templates.length) {
+      templateList.value = tpls.templates
+      const preferred = tpls.preferredTemplateId ? tpls.templates.find(x => x.id === tpls.preferredTemplateId) : null
+      currentTemplate.value = preferred || tpls.templates.find(x => x.isDefault) || tpls.templates[0] || null
+    }
+    // 套用模板字段结构：模板用到的区块补进表单；结构化有数据但模板未用到的区块也保留（数据不丢）
+    const withDataIds = []
+    const base = data.structured || null
+    for (const id of SECTION_ORDER) if (sectionHasData(id, base)) withDataIds.push(id)
+    const existing = new Set(form.value.sections.map(s => s.id))
+    for (const id of withDataIds) {
+      if (!existing.has(id)) {
+        form.value.sections.push(emptySectionForm(id))
+        existing.add(id)
+      }
+    }
+    if (currentTemplate.value) mergeTemplateSections(currentTemplate.value)
   } catch (err) {
     emptyText.value = err.message
     meta.value = ''
@@ -386,3 +312,23 @@ onMounted(async () => {
   }
 })
 </script>
+
+<style scoped>
+.basic-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.section-actions { display: inline-flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.section-actions .text-button { min-height: 36px; padding: 4px 8px; }
+.text-button:disabled { opacity: .45; cursor: not-allowed; text-decoration: none; }
+.edit-actions { display: flex; justify-content: flex-end; }
+.add-section-bar { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.add-section-label { font-size: 13px; font-weight: 900; color: var(--color-muted); }
+#add-section-select { min-height: 44px; padding: 4px 10px; border: var(--border-thin); border-radius: var(--radius-sm); background: var(--color-surface); font: inherit; }
+.edit-template-switcher { margin-top: var(--space-4); }
+.edit-preview { margin-top: var(--space-6); padding: clamp(18px, 3vw, 28px); border: var(--border-strong); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-hard-md); }
+.edit-preview-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
+.edit-preview-head h2 { margin: 0; font-size: 22px; line-height: 1.3; }
+.template-frame-wrap { display: grid; justify-items: center; width: 100%; }
+.template-frame { width: 794px; max-width: 100%; height: 900px; border: 1px solid #d8dde6; border-radius: var(--radius-sm); background: #fff; }
+@media (max-width: 640px) {
+  .basic-grid { grid-template-columns: 1fr; }
+}
+</style>

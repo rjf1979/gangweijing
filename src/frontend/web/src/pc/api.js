@@ -45,4 +45,5 @@ export const api = {
   delete: (url) => request(url, { method: 'DELETE' }),
   uploadResume: (file, onProgress) => upload('/api/extract/resume', 'resume', file, onProgress),
   uploadScreenshot: (file) => upload('/api/extract/screenshot', 'screenshot', file),
+  uploadAvatar: (file, onProgress) => upload('/api/resume/avatar', 'avatar', file, onProgress),
 }

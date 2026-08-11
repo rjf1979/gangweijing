@@ -10,6 +10,7 @@
         <router-link to="/my-resume">我的简历</router-link>
         <button type="button" class="header-link" @click="openJobAnalysis">岗位分析</button>
         <router-link to="/reports">我的报告</router-link>
+        <button id="logout-btn" type="button" class="header-link" @click="doLogout">退出登录</button>
       </nav>
     </div>
   </header>
@@ -18,9 +19,17 @@
 <script setup>
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { store, clearJobDraft } from '../store'
+import { store, clearJobDraft, logout, showLoading, hideLoading } from '../store'
 
 const router = useRouter()
+
+// 退出登录：清理会话与本地草稿后回到登录页
+async function doLogout() {
+  showLoading('正在退出', '清理登录状态')
+  await logout()
+  hideLoading()
+  router.push('/login')
+}
 
 const emailPrefix = computed(() => String(store.user?.email || '').split('@')[0] || '已登录用户')
 const displayName = computed(() => {
