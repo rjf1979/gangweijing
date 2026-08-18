@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
@@ -34,10 +35,14 @@ const readDb = () => dbStore.readDb();
 const saveDb = db => dbStore.saveDb(db);
 // 后台配置（admin_settings 数据库）：邮件配置优先于环境变量兜底，保存后立即生效；AI 凭证由 ai_keys / ai_models 提供
 const appConfig = { resendApiKey: '', emailFrom: '', analysisConcurrency: 2, announcement: '', announcementUpdatedAt: null };
+let appConfigFetchedAt = 0; // 后台配置上次成功拉取时间，用于 TTL 缓存避免每次 AI 调用前重复查询
+const APP_CONFIG_TTL_MS = 10000;
 // ===== 后台排队分析：所有岗位分析（首次+重新分析）统一入队，按系统配置的并发数执行 =====
 const analysisQueue = []; // 待处理任务（先进先出）
 let analysisWorkers = []; // 活跃 worker 列表
 const ANALYSIS_MAX_WORKERS = 10;
+const analysisQueueEvents = new EventEmitter(); // 队列非空 / 停机信号，替代忙等轮询
+let activeAnalysisTasks = 0; // 正在执行的分析任务数（优雅停机时等待归零）
 function analysisWorkerTarget() {
   const n = parseInt(appConfig.analysisConcurrency, 10);
   return Number.isFinite(n) && n > 0 ? Math.min(n, ANALYSIS_MAX_WORKERS) : 2;
@@ -46,14 +51,24 @@ async function runAnalysisWorker(worker) {
   while (worker.running) {
     const task = analysisQueue.shift();
     if (!task) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // 队列为空时挂起等待，直到新任务入队或收到停机信号，避免 500ms 忙等轮询
+      await new Promise(resolve => {
+        const onTask = () => { cleanup(); resolve(); };
+        const onStop = () => { cleanup(); resolve(); };
+        const cleanup = () => { analysisQueueEvents.off('task', onTask); analysisQueueEvents.off('stop', onStop); };
+        analysisQueueEvents.once('task', onTask);
+        analysisQueueEvents.once('stop', onStop);
+      });
       continue;
     }
+    activeAnalysisTasks += 1;
     try {
       await processAnalysisTask(task);
     } catch (error) {
       console.error('分析任务异常：', task.reportId, error.message);
       try { await dbStore.updateReportFields(task.reportId, { status: 'failed', emailStatus: 'unknown', updatedAt: new Date().toISOString() }); } catch {}
+    } finally {
+      activeAnalysisTasks -= 1;
     }
   }
 }
@@ -67,12 +82,15 @@ function syncAnalysisWorkers() {
   if (analysisWorkers.length > target) {
     analysisWorkers.slice(target).forEach(worker => { worker.running = false; });
     analysisWorkers = analysisWorkers.slice(0, target);
+    analysisQueueEvents.emit('stop'); // 唤醒被裁撤的 worker，让其退出循环
   }
 }
 async function processAnalysisTask(task) {
   // 任务状态同步到统一任务列表（管理后台「任务列表」页）
   const syncJob = patch => dbStore.updateJob(task.reportId, patch).catch(error => console.error('同步报告生成任务失败：', error.message));
-  await syncJob({ status: 'running', startedAt: new Date(), error: null });
+  const setProgress = progress => syncJob({ progress });
+  const setRetries = retries => syncJob({ retries });
+  await syncJob({ status: 'running', startedAt: new Date(), error: null, progress: 5 });
   try {
     const db = await readDb();
     const record = db.reports.find(item => item.id === task.reportId);
@@ -90,6 +108,10 @@ async function processAnalysisTask(task) {
       jobTitle: task.jobTitle,
       companyShortName: task.companyShortName,
       baseRecord: record,
+      hooks: {
+        onProgress: (_stage, progress) => setProgress(progress),
+        onRetry: attempt => setRetries(attempt),
+      },
     });
     await dbStore.updateReportFields(record.id, {
       status: 'completed',
@@ -104,7 +126,7 @@ async function processAnalysisTask(task) {
       costSource: result.costSource || null,
       updatedAt: result.updatedAt,
     });
-    await syncJob({ status: 'done', result: { reportId: record.id, reportName: result.reportName, companyShortName: result.companyShortName, jobTitle: result.jobTitle }, finishedAt: new Date() });
+    await syncJob({ status: 'done', progress: 100, result: { reportId: record.id, reportName: result.reportName, companyShortName: result.companyShortName, jobTitle: result.jobTitle }, finishedAt: new Date() });
   } catch (error) {
     await syncJob({ status: 'error', error: error.message || String(error), finishedAt: new Date() });
     throw error;
@@ -122,7 +144,8 @@ async function recoverStaleAnalyzing() {
   } catch (error) { console.error('恢复遗留分析任务失败：', error.message); }
 }
 await refreshAppConfig();
-async function refreshAppConfig() {
+async function refreshAppConfig({ force = false } = {}) {
+  if (!force && Date.now() - appConfigFetchedAt < APP_CONFIG_TTL_MS) return; // TTL 内不重复查询，降低 DB 压力
   try {
     const row = await dbStore.getAppSettings();
     if (row) {
@@ -133,6 +156,7 @@ async function refreshAppConfig() {
       const n = parseInt(row.analysis_concurrency, 10);
       if (Number.isFinite(n) && n > 0) appConfig.analysisConcurrency = Math.min(n, 10);
     }
+    appConfigFetchedAt = Date.now();
   } catch (error) { console.error('读取后台 AI/邮件配置失败：', error.message); }
   syncAnalysisWorkers();
 }
@@ -213,8 +237,93 @@ const computeReportCost = async usage => {
   const value = (Number(usage.inputTokens) / 1e6) * price.input + (Number(usage.outputTokens) / 1e6) * price.output;
   return { value, source: 'estimate', currency: 'USD' };
 };
-async function callResponses(body, opts = {}) { await refreshAppConfig(); const base = (opts.baseUrl || aiBaseUrl()).replace(/\/$/, ''); const key = opts.apiKey || process.env.OPENAI_API_KEY; const response = await fetch(`${base}/responses`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}) }); if (!response.ok) throw new Error(`AI 接口返回 ${response.status}`); return response.json(); }
-async function callChatCompletions(body, opts = {}) { await refreshAppConfig(); const base = (opts.baseUrl || aiBaseUrl()).replace(/\/$/, ''); const key = opts.apiKey || process.env.OPENAI_API_KEY; const response = await fetch(`${base}/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}) }); if (!response.ok) throw new Error(`AI 接口返回 ${response.status}`); return response.json(); }
+// ===== AI 调用可靠性：默认超时兜底 + 可重试错误分类 + 指数退避重试 =====
+const AI_DEFAULT_TIMEOUT_MS = 120000;
+const AI_MAX_RETRIES = 3;
+const AI_RETRY_BASE_DELAY_MS = 1000;
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+class AiCallError extends Error {
+  constructor(message, { status = null, retryable = false, cause } = {}) {
+    super(message);
+    this.name = 'AiCallError';
+    this.status = status;
+    this.retryable = retryable;
+    if (cause) this.cause = cause;
+  }
+}
+function isRetryableAiError(error) {
+  if (error instanceof AiCallError) return error.retryable;
+  if (error?.name === 'AbortError' || error?.name === 'TimeoutError') return true;
+  const msg = String(error?.message || '');
+  return /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|UND_ERR|socket hang up|network/i.test(msg);
+}
+// 对可重试错误做指数退避 + 随机抖动重试；不可重试错误（如 4xx、JSON 解析失败）直接抛出
+async function withAiRetry(run, { retries = AI_MAX_RETRIES, onRetry } = {}) {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await run();
+    } catch (error) {
+      if (!isRetryableAiError(error)) throw error;
+      attempt += 1;
+      if (attempt > retries) throw error;
+      const delay = Math.min(AI_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), 30000) + Math.floor(Math.random() * 1000);
+      if (onRetry) await onRetry(attempt, error, delay);
+      console.warn(`AI 调用可重试失败（第 ${attempt} 次），${delay}ms 后重试：`, error.message);
+      await sleep(delay);
+    }
+  }
+}
+async function callResponses(body, opts = {}) {
+  await refreshAppConfig();
+  const base = (opts.baseUrl || aiBaseUrl()).replace(/\/$/, '');
+  const key = opts.apiKey || process.env.OPENAI_API_KEY;
+  const timeoutMs = opts.timeoutMs || AI_DEFAULT_TIMEOUT_MS;
+  let response;
+  try {
+    response = await fetch(`${base}/responses`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    throw new AiCallError(`AI 接口请求失败：${error.message}`, { retryable: true, cause: error });
+  }
+  if (!response.ok) {
+    const status = response.status;
+    const retryable = status >= 500 || status === 429 || status === 408;
+    let detail = '';
+    try { detail = String((await response.text()).slice(0, 300)); } catch {}
+    throw new AiCallError(`AI 接口返回 ${status}${detail ? `：${detail}` : ''}`, { status, retryable });
+  }
+  return response.json();
+}
+async function callChatCompletions(body, opts = {}) {
+  await refreshAppConfig();
+  const base = (opts.baseUrl || aiBaseUrl()).replace(/\/$/, '');
+  const key = opts.apiKey || process.env.OPENAI_API_KEY;
+  const timeoutMs = opts.timeoutMs || AI_DEFAULT_TIMEOUT_MS;
+  let response;
+  try {
+    response = await fetch(`${base}/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    throw new AiCallError(`AI 接口请求失败：${error.message}`, { retryable: true, cause: error });
+  }
+  if (!response.ok) {
+    const status = response.status;
+    const retryable = status >= 500 || status === 429 || status === 408;
+    let detail = '';
+    try { detail = String((await response.text()).slice(0, 300)); } catch {}
+    throw new AiCallError(`AI 接口返回 ${status}${detail ? `：${detail}` : ''}`, { status, retryable });
+  }
+  return response.json();
+}
 async function resolveAiModel(modelType) {
   try { const row = await dbStore.getDefaultAiModel(modelType); if (row) return row; } catch (error) { console.error('读取主模型失败：', error.message); }
   return null;
@@ -780,7 +889,9 @@ app.post('/api/extract/screenshot', upload.single('screenshot'), async (req, res
     }
     const result = parseJsonText(extractText(payload)); const ocrModel = activeOcr?.modelId || process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL; const ocrUsage = extractUsage(payload, ocrModel); const ocrCost = await computeReportCost(ocrUsage); await trackJob('done', { companyShortName: result.company_short_name || '', jobTitle: result.job_title || '' }); res.json({ text: result.text || '', companyShortName: result.company_short_name || '', jobTitle: result.job_title || '', warnings: result.warnings || [], usage: ocrUsage ? { ...ocrUsage, costSource: ocrCost.source, currency: ocrCost.currency } : null, costUsd: ocrCost.value, costSource: ocrCost.source }); } catch (error) { await trackJob('error', { error: `AI 截图识别失败：${error.message}` }); res.status(502).json({ error: `AI 截图识别失败：${error.message}` }); } finally { if (req.file?.path) await fs.unlink(req.file.path).catch(() => {}); } });
 // 生成分析报告（供首次分析与重新分析复用）：构建报告记录 + 发送结果邮件
-async function generateReport({ user, resumeText, jobText, jobTitle, companyShortName, baseRecord }) {
+async function generateReport({ user, resumeText, jobText, jobTitle, companyShortName, baseRecord, hooks = {} }) {
+  const { onProgress = () => {}, onRetry = () => {} } = hooks;
+  await onProgress('preparing', 10);
   await refreshAppConfig();
   const active = await resolveAiModel('text');
   const credential = await resolveAiCredential(active);
@@ -798,14 +909,18 @@ async function generateReport({ user, resumeText, jobText, jobTitle, companyShor
   let payload;
   let usedModel;
   const callOpts = credential.apiKey ? { apiKey: credential.apiKey, ...(credential.baseUrl ? { baseUrl: credential.baseUrl } : {}) } : {};
-  if (active?.apiProtocol === 'responses') {
-    payload = await callResponses({ model: active.modelId, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } }, callOpts);
-  } else if (active) {
-    payload = await callChatCompletions({ model: active.modelId, messages: [{ role: 'user', content: prompt }], temperature: 0.2, response_format: { type: 'json_object' } }, callOpts);
-  } else {
-    payload = await callResponses({ model: process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } }, callOpts);
-  }
+  await onProgress('analyzing', 15);
+  payload = await withAiRetry(async () => {
+    if (active?.apiProtocol === 'responses') {
+      return callResponses({ model: active.modelId, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } }, callOpts);
+    }
+    if (active) {
+      return callChatCompletions({ model: active.modelId, messages: [{ role: 'user', content: prompt }], temperature: 0.2, response_format: { type: 'json_object' } }, callOpts);
+    }
+    return callResponses({ model: process.env.OPENAI_MODEL, input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }], temperature: 0.2, text: { format: { type: 'json_object' } } }, callOpts);
+  }, { retries: AI_MAX_RETRIES, onRetry: async (attempt, error) => { await onRetry(attempt, error); } });
   usedModel = active?.modelId || process.env.OPENAI_MODEL;
+  await onProgress('analyzing', 75);
   const report = parseJsonText(extractText(payload));
   const usage = extractUsage(payload, usedModel);
   const cost = await computeReportCost(usage);
@@ -841,6 +956,7 @@ async function generateReport({ user, resumeText, jobText, jobTitle, companyShor
   const reportUrl = `${publicAppUrl()}/report/${accessToken}`;
   let emailSent = false;
   try {
+    await onProgress('emailing', 90);
     await sendReportEmail(email, reportUrl, report);
     emailSent = Boolean(email && appConfig.resendApiKey && appConfig.emailFrom);
     record.emailStatus = emailSent ? 'sent' : 'not_configured';
@@ -874,6 +990,7 @@ app.post('/api/analyze', async (req, res) => {
   await saveDb(db);
   analysisQueue.push({ reportId: record.id, userId: user.id, resumeText, jobText, jobTitle: jobTitle || '', companyShortName: companyShortName || '' });
   syncAnalysisWorkers();
+  analysisQueueEvents.emit('task'); // 唤醒等待中的 worker
   // 任务状态同步到统一任务列表
   try {
     await dbStore.insertJob({
@@ -915,6 +1032,7 @@ app.post('/api/reports/:id/reanalyze', async (req, res) => {
   await saveDb(db);
   analysisQueue.push({ reportId: created.id, userId: user.id, resumeText: user.resumeText, jobText: record.jobText, jobTitle: record.jobTitle || '', companyShortName: record.companyShortName || '' });
   syncAnalysisWorkers();
+  analysisQueueEvents.emit('task'); // 唤醒等待中的 worker
   // 任务状态同步到统一任务列表
   try {
     await dbStore.insertJob({
@@ -1021,5 +1139,24 @@ setInterval(cleanupTempFiles, 60 * 60 * 1000).unref();
 recoverStaleAnalyzing().then(() => syncAnalysisWorkers()).catch(error => console.error('启动恢复分析任务失败：', error.message));
 const port = Number(process.env.PORT || 3215);
 const host = process.env.HOST || '127.0.0.1';
-app.listen(port, host, () => console.log(`岗位镜运行在 http://${host}:${port}`));
+const server = app.listen(port, host, () => console.log(`岗位镜运行在 http://${host}:${port}`));
+
+// 优雅停机：收到 SIGTERM/SIGINT 后停止接收新任务，等待在跑任务完成，再关闭连接池
+const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30000;
+let shuttingDown = false;
+async function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`收到 ${signal}，开始优雅停机（等待在跑任务完成，最多 ${GRACEFUL_SHUTDOWN_TIMEOUT_MS}ms）...`);
+  analysisWorkers.forEach(worker => { worker.running = false; });
+  analysisQueueEvents.emit('stop');
+  server.close(); // 停止接收新的 HTTP 连接
+  const deadline = Date.now() + GRACEFUL_SHUTDOWN_TIMEOUT_MS;
+  while (activeAnalysisTasks > 0 && Date.now() < deadline) await sleep(200);
+  if (activeAnalysisTasks > 0) console.error(`优雅停机超时，仍有 ${activeAnalysisTasks} 个分析任务在跑，强制退出`);
+  try { await dbStore.close(); } catch (error) { console.error('关闭数据库连接池失败：', error.message); }
+  process.exit(activeAnalysisTasks > 0 ? 1 : 0);
+}
+process.on('SIGTERM', () => { gracefulShutdown('SIGTERM'); });
+process.on('SIGINT', () => { gracefulShutdown('SIGINT'); });
 
