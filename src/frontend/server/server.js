@@ -558,6 +558,39 @@ app.get('/api/me/invite', async (req, res) => {
   });
 });
 
+// ===== 意见箱：用户提交意见/建议（登录可选；登录自动绑定账号，未登录需留联系方式）=====
+const FEEDBACK_CATEGORIES = ['suggestion', 'bug', 'other'];
+const FEEDBACK_MAX_CONTENT = 2000;
+const FEEDBACK_COOLDOWN_MS = 30 * 1000; // 同一来源 30 秒内限 1 条，防刷
+const feedbackRecent = new Map(); // key: u:<userId> | e:<email> | ip:<ip> -> 上次提交时间
+app.post('/api/feedback', async (req, res) => {
+  const db = await readDb();
+  const user = currentUser(req, db);
+  const category = String(req.body?.category || 'other');
+  const content = String(req.body?.content || '').trim();
+  const contact = String(req.body?.contact || '').trim().slice(0, 100);
+  if (!FEEDBACK_CATEGORIES.includes(category)) return res.status(400).json({ error: '请选择有效的意见类型。' });
+  if (content.length < 2 || content.length > FEEDBACK_MAX_CONTENT) return res.status(400).json({ error: `请填写 2-${FEEDBACK_MAX_CONTENT} 字的意见内容。` });
+  const sourceEmail = String(req.body?.email || '').trim().toLowerCase();
+  const sourceKey = user ? `u:${user.id}` : (sourceEmail || `ip:${req.ip || 'anon'}`);
+  const lastAt = feedbackRecent.get(sourceKey) || 0;
+  const remain = FEEDBACK_COOLDOWN_MS - (Date.now() - lastAt);
+  if (remain > 0) return res.status(429).json({ error: `提交太频繁，请 ${Math.ceil(remain / 1000)} 秒后再试。` });
+  feedbackRecent.set(sourceKey, Date.now());
+  if (feedbackRecent.size > 2000) {
+    for (const [key, ts] of feedbackRecent) { if (Date.now() - ts > 10 * 60 * 1000) feedbackRecent.delete(key); }
+  }
+  await dbStore.insertFeedback({
+    id: crypto.randomUUID(),
+    userId: user ? user.id : null,
+    email: user ? user.email : (sourceEmail || null),
+    category,
+    content,
+    contact: user ? (contact || null) : (contact || sourceEmail || null),
+  });
+  res.json({ ok: true });
+});
+
 app.get('/api/config', async (req, res) => {
   await refreshAppConfig(); // 每次读取最新后台配置，公告修改后无需重启即生效
   const db = await readDb();

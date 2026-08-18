@@ -188,4 +188,24 @@ export const api = {
   async deleteResumeTemplate(id) {
     return request(`/resume-templates/${id}`, { method: 'DELETE' })
   },
+
+  // ===== 意见箱（PC 端意见反馈） =====
+  async feedbackStats() {
+    const data = await request('/feedback/stats')
+    return data.stats || {}
+  },
+  async listFeedback(params = {}) {
+    const qs = new URLSearchParams()
+    if (params.status) qs.set('status', params.status)
+    if (params.limit) qs.set('limit', String(params.limit))
+    if (params.offset) qs.set('offset', String(params.offset))
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return request(`/feedback${suffix}`)
+  },
+  async updateFeedback(id, { status, reply } = {}) {
+    return request(`/feedback/${id}`, { method: 'PATCH', body: JSON.stringify({ status, reply }) })
+  },
+  async deleteFeedback(id) {
+    return request(`/feedback/${id}`, { method: 'DELETE' })
+  },
 }

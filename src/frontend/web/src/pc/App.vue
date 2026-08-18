@@ -7,6 +7,7 @@
   <SiteFooter />
   <AppLoading />
   <AnnouncementDialog />
+  <FeedbackWidget />
 </template>
 
 <script setup>
@@ -16,6 +17,7 @@ import SiteHeader from './components/SiteHeader.vue'
 import SiteFooter from './components/SiteFooter.vue'
 import AppLoading from './components/AppLoading.vue'
 import AnnouncementDialog from './components/AnnouncementDialog.vue'
+import FeedbackWidget from './components/FeedbackWidget.vue'
 import { store, refreshSession, hideLoading } from './store'
 
 const router = useRouter()

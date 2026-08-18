@@ -176,6 +176,23 @@ CREATE INDEX IF NOT EXISTS app_jobs_created_at_idx ON app_jobs (created_at DESC)
 CREATE INDEX IF NOT EXISTS app_jobs_status_idx ON app_jobs (status);
 CREATE INDEX IF NOT EXISTS app_jobs_type_idx ON app_jobs (task_type);
 
+CREATE TABLE IF NOT EXISTS app_feedback (
+  id uuid PRIMARY KEY,
+  user_id uuid REFERENCES app_users(id) ON DELETE SET NULL,
+  email text,
+  category text NOT NULL DEFAULT 'other',
+  content text NOT NULL,
+  contact text,
+  status text NOT NULL DEFAULT 'pending',
+  reply text,
+  replied_at timestamptz,
+  handled_at timestamptz,
+  created_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS app_feedback_created_at_idx ON app_feedback (created_at DESC);
+CREATE INDEX IF NOT EXISTS app_feedback_status_idx ON app_feedback (status);
+CREATE INDEX IF NOT EXISTS app_feedback_user_id_idx ON app_feedback (user_id);
+
 `;
 
 function selectedUrl() {
@@ -221,6 +238,20 @@ const mapJob = row => row && ({
   retriedFrom: row.retried_from || null,
   retries: Number(row.retries) || 0,
   result: row.result || null,
+});
+
+const mapFeedback = row => row && ({
+  id: row.id,
+  userId: row.user_id || null,
+  email: row.email || null,
+  category: row.category,
+  content: row.content,
+  contact: row.contact || null,
+  status: row.status,
+  reply: row.reply || null,
+  repliedAt: row.replied_at ? row.replied_at.toISOString() : null,
+  handledAt: row.handled_at ? row.handled_at.toISOString() : null,
+  createdAt: row.created_at.toISOString(),
 });
 
 
@@ -411,6 +442,65 @@ export function createPgStore() {
         values
       );
       return rows.length;
+    },
+
+    // ===== 意见箱（app_feedback）：用户端提交，管理后台查看/处理 =====
+    async insertFeedback(input) {
+      const { rows } = await pool.query(
+        `INSERT INTO app_feedback (id, user_id, email, category, content, contact, status, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,'pending',now()) RETURNING *`,
+        [input.id, input.userId || null, input.email || null, input.category || 'other', input.content, input.contact || null]
+      );
+      return mapFeedback(rows[0]);
+    },
+    async listFeedback({ status = null, limit = 50, offset = 0 } = {}) {
+      const conditions = [];
+      const values = [];
+      if (status) { conditions.push('status = $' + (values.length + 1)); values.push(status); }
+      const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+      const { rows } = await pool.query(
+        `SELECT * FROM app_feedback ${where} ORDER BY created_at DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+        [...values, limit, offset]
+      );
+      return rows.map(mapFeedback);
+    },
+    async countFeedback({ status = null } = {}) {
+      const conditions = [];
+      const values = [];
+      if (status) { conditions.push('status = $' + (values.length + 1)); values.push(status); }
+      const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+      const { rows } = await pool.query(`SELECT COUNT(*)::int AS count FROM app_feedback ${where}`, values);
+      return rows[0]?.count || 0;
+    },
+    async feedbackStats() {
+      const { rows } = await pool.query(
+        `SELECT COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
+                COUNT(*) FILTER (WHERE status = 'handled')::int AS handled
+         FROM app_feedback`
+      );
+      return rows[0] || { total: 0, pending: 0, handled: 0 };
+    },
+    async getFeedback(id) {
+      const { rows } = await pool.query('SELECT * FROM app_feedback WHERE id = $1', [id]);
+      return mapFeedback(rows[0] || null);
+    },
+    async updateFeedback(id, patch = {}) {
+      const fields = [];
+      const values = [];
+      const push = (col, val) => { fields.push(col + ' = $' + (fields.length + 1)); values.push(val); };
+      if ('status' in patch) push('status', patch.status);
+      if ('reply' in patch) push('reply', patch.reply || null);
+      if ('repliedAt' in patch) push('replied_at', patch.repliedAt || null);
+      if ('handledAt' in patch) push('handled_at', patch.handledAt || null);
+      if (!fields.length) return null;
+      values.push(id);
+      const { rows } = await pool.query('UPDATE app_feedback SET ' + fields.join(', ') + ' WHERE id = $' + (fields.length + 1) + ' RETURNING *', values);
+      return mapFeedback(rows[0] || null);
+    },
+    async deleteFeedback(id) {
+      const { rows } = await pool.query('DELETE FROM app_feedback WHERE id = $1 RETURNING id', [id]);
+      return rows.length > 0;
     }
   };
 }

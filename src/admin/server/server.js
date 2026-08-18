@@ -1159,6 +1159,40 @@ app.post('/api/admin/jobs/:jobId/retry', requireAdmin, async (req, res) => {
   res.json({ ok: true, job: publicJob(updated || { ...row, status: 'pending' }) });
 });
 
+// ===== 意见箱 API（管理后台「意见箱」页：查看 / 统计 / 标记处理 / 回复 / 删除）=====
+app.get('/api/admin/feedback/stats', requireAdmin, async (req, res) => {
+  res.json({ stats: await store.feedbackStats() });
+});
+
+app.get('/api/admin/feedback', requireAdmin, async (req, res) => {
+  const status = String(req.query.status || '').trim() || null;
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+  const [total, items] = await Promise.all([
+    store.countFeedback({ status }),
+    store.listFeedback({ status, limit, offset }),
+  ]);
+  res.json({ total, limit, offset, items });
+});
+
+app.patch('/api/admin/feedback/:id', express.json(), requireAdmin, async (req, res) => {
+  const row = await store.getFeedback(req.params.id);
+  if (!row) return res.status(404).json({ error: '意见不存在。' });
+  const { status, reply } = req.body || {};
+  const patch = {};
+  if (status === 'handled') { patch.status = 'handled'; patch.handledAt = new Date(); }
+  if (status === 'pending') { patch.status = 'pending'; patch.handledAt = null; patch.repliedAt = null; }
+  if (typeof reply === 'string') { patch.reply = reply.trim().slice(0, 2000) || null; patch.repliedAt = new Date(); }
+  const updated = await store.updateFeedback(row.id, patch);
+  res.json({ ok: true, item: updated });
+});
+
+app.delete('/api/admin/feedback/:id', requireAdmin, async (req, res) => {
+  const removed = await store.deleteFeedback(req.params.id);
+  if (!removed) return res.status(404).json({ error: '意见不存在。' });
+  res.json({ ok: true });
+});
+
 app.get('/api/admin/resume-templates/:id', requireAdmin, async (req, res) => {
   const t = await store.getResumeTemplate(req.params.id);
   if (!t) return res.status(404).json({ error: '模板不存在。' });
